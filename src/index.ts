@@ -1,0 +1,56 @@
+import fs from 'fs/promises';
+import { config } from './config.js';
+import { ToolRegistry } from './tools/types.js';
+import { readFileTool } from './tools/readFile.js';
+import { writeFileTool } from './tools/writeFile.js';
+import { listFilesTool } from './tools/listFiles.js';
+import { shellTool } from './tools/shell.js';
+import { browseTool } from './tools/browse.js';
+import { saveMemoryTool } from './memory/memory.js';
+import { loadSkillTool } from './skills/loader.js';
+import { cliChannel } from './channels/cli.js';
+import { createDiscordChannel } from './channels/discord.js';
+import { createWebChannel } from './channels/web.js';
+import { loadPlugins } from './plugins/loader.js';
+import { createAgent } from './agent.js';
+import type { Channel } from './channels/types.js';
+
+async function main() {
+  await fs.mkdir(config.workspaceDir, { recursive: true });
+
+  // --- Tools ---
+  const registry = new ToolRegistry();
+  registry.register(readFileTool);
+  registry.register(writeFileTool);
+  registry.register(listFilesTool);
+  registry.register(saveMemoryTool);
+  registry.register(loadSkillTool);
+  if (config.allowShell) registry.register(shellTool);
+  if (config.allowBrowser) registry.register(browseTool);
+
+  // --- Channels ---
+  const useWeb = config.enableWeb || process.argv.includes('--web');
+  const useCli = !config.discordToken || process.argv.includes('--cli');
+  const channels: Channel[] = [];
+  if (config.discordToken) channels.push(createDiscordChannel());
+  if (useWeb) channels.push(createWebChannel());
+  if (useCli) channels.push(cliChannel);
+
+  // --- Plugins ---
+  await loadPlugins({
+    registerTool: (t) => registry.register(t),
+    registerChannel: (ch) => channels.push(ch),
+  });
+
+  // --- Start all channels ---
+  for (const ch of channels) {
+    const agent = createAgent(registry, ch);
+    await ch.start((msg) => agent.handle(msg.sessionKey, msg.text));
+    console.log(`[gateway] channel started: ${ch.name}`);
+  }
+}
+
+main().catch((err) => {
+  console.error('Fatal:', err);
+  process.exit(1);
+});

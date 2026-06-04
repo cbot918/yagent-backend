@@ -1,0 +1,154 @@
+set
+
+bacnekd
+ENABLE_WEB=true
+
+frontend
+VITE_API_BASE=""
+
+
+
+How it works today (the thing you're splitting)
+
+  Right now it's a monolith: the backend (src/channels/web.ts) serves the built Vue app from web/dist and the API and the WebSocket, all on one
+  port. The browser talks to it same-origin — useAgentSocket.ts builds the WS URL from location.host and fetches relative /api/.... That's why
+  nothing is configurable yet.
+
+  When you split into two Zeabur services on two domains, the frontend is no longer same-origin as the backend, so you need (a) a configurable
+  backend URL in the frontend and (b) CORS on the backend. That's the whole job.
+
+  ---
+  Q1 — How does the backend communicate with the frontend?
+
+  Two separately-deployed pieces talking over the public internet:
+
+  [yagent-webui]  static Vue site         [yagent-backend]  Node service
+    (Zeabur static)                          (Zeabur service)
+          │  HTTPS  fetch GET https://backend/api/...        │
+          │ ───────────────────────────────────────────────▶│  REST
+          │  WSS    wss://backend/ws  (AgentEvent stream)     │
+          └◀─────────────────────────────────────────────────┘  WebSocket
+
+  - REST (/api/sessions, /api/sessions/:key/memory, /api/transcribe): cross-origin fetch → browser enforces CORS, so the backend must send
+  Access-Control-Allow-Origin and answer OPTIONS preflights.
+  - WebSocket (/ws): browsers do not apply CORS to WS, so it "just works" cross-origin once the frontend points at wss://backend/ws. (Optional:
+  origin-check it server-side.)
+
+  Frontend change — add one tiny URL helper and use a build-time env var. Create web/src/api.ts:
+
+  // Empty in dev → relative paths + the Vite proxy. Set in prod to the backend origin.
+  const BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '');
+  export const apiUrl = (path: string) => `${BASE}${path}`;
+  export const wsUrl = () => {
+    const origin = BASE || location.origin;
+    return origin.replace(/^http/, 'ws') + '/ws';   // http→ws, https→wss
+  };
+
+  Then swap the 3 hardcoded spots to use it:
+  - useAgentSocket.ts: new WebSocket(wsUrl()) and fetch(apiUrl('/api/sessions'))
+  - MemoryPanel.vue: fetch(apiUrl('/api/sessions/.../memory'))
+  - useSpeech.ts: fetch(apiUrl('/api/transcribe'))
+
+  Set VITE_API_BASE=https://yagent-backend.zeabur.app in the webui Zeabur service (build-time env — Vite inlines VITE_* at build). Leave it
+  unset locally so dev keeps using the Vite proxy.
+
+  Backend change — add CORS in src/channels/web.ts. A WEB_ORIGIN env (your webui domain, or * to start) plus preflight handling:
+
+  const ALLOWED = process.env.WEB_ORIGIN ?? '*';
+  function cors(res: http.ServerResponse) {
+    res.setHeader('Access-Control-Allow-Origin', ALLOWED);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  Call cors(res) inside sendJson, and short-circuit OPTIONS at the top of the request handler with cors(res); res.writeHead(204); res.end();.
+  (The /api/transcribe POST sends content-type: audio/webm, which is not a CORS "simple" request, so it will preflight — that's why OPTIONS +
+  Allow-Headers: Content-Type matter.)
+
+  ---
+  Q2 — How does the backend communicate with the Discord app?
+
+  This is the easy one — nothing changes and you need no public URL for it. discord.js (src/channels/discord.js) opens an outbound persistent 
+  WebSocket to Discord's gateway when you call client.login(token). Discord pushes message events down that socket; the bot replies over the
+  same connection. It's all egress.
+
+  So for Discord on the backend service you only need:
+  1. DISCORD_TOKEN env var on yagent-backend.
+  2. In the Discord Developer Portal → your app → Bot → enable the Message Content Intent (privileged — the code requests
+  GatewayIntentBits.MessageContent). Invite the bot to your server.
+  3. The service must stay running 24/7. ⚠️  The single biggest Zeabur gotcha: if the service scales to zero / sleeps, the gateway socket drops
+  and the bot goes offline. Keep yagent-backend as an always-on service.
+  
+  Note both channels live in one process — src/index.ts starts Discord and the web channel when a token is present and ENABLE_WEB=true. So one 
+  yagent-backend service handles both Discord and the web API/WS. You don't need a separate service for the bot.
+
+  ---
+  Backend changes for Zeabur (beyond CORS)
+
+  1. Bind to Zeabur's port. Zeabur injects PORT. Change config.ts:
+  webPort: Number(process.env.PORT ?? process.env.WEB_PORT ?? 3001),
+  2. Persistence. Sessions/memory are files under WORKSPACE_DIR (.sessions/*.json, .memory/*.md). Container filesystems are ephemeral — attach a
+  Zeabur Volume, mount it at e.g. /data, and set WORKSPACE_DIR=/data. Without this, every redeploy wipes all chat history + memory.
+  3. Static serving becomes a no-op — fine to leave; the backend just won't find web/dist and that path is never hit since the frontend is
+  elsewhere.
+  4. Keep risky tools off in prod: ALLOW_SHELL=false (host shell runs in your container), and ALLOW_BROWSER=false unless you build a
+  Playwright-capable image (Chromium + system deps are heavy and need npx playwright install). Use e2b for shell if you actually need it.
+  5. Node version: add "engines": { "node": ">=20" } to package.json so Zeabur picks a modern Node (you're on 22 locally).
+
+  ---
+  Repo split mechanics
+
+  You're going from a monorepo (yagent/ = backend src/ + web/) to two repos. Make each repo's build root the package root Zeabur detects:
+
+  - yagent-backend ← contents of yagent/ minus web/ (root has the backend package.json, src/, skills/, plugins/, tsconfig).
+  - yagent-webui ← contents of yagent/web/ at the repo root (so package.json, vite.config.ts, index.html, src/ are top-level).
+
+  ---
+  Repo split mechanics
+
+  You're going from a monorepo (yagent/ = backend src/ + web/) to two repos. Make each repo's build root the package root Zeabur detects:
+
+  - yagent-backend ← contents of yagent/ minus web/ (root has the backend package.json, src/, skills/, plugins/, tsconfig).
+  - yagent-webui ← contents of yagent/web/ at the repo root (so package.json, vite.config.ts, index.html, src/ are top-level).
+
+  Watch-out: web/src/types.ts is hand-synced with backend src/events.ts (there's a comment saying so). After the split that stays a manual
+  mirror — keep them in step when you change the event shape.
+
+  mirror — keep them in step when you change the event shape.
+
+  ---
+  ---
+  Zeabur service config (summary)
+
+  yagent-backend (Node service, always-on):
+  - Build: npm install && npm run build · Start: npm start
+  - Env: OPENAI_API_KEY, OPENAI_BASE_URL (if OpenRouter), OPENAI_MODEL, DISCORD_TOKEN, ENABLE_WEB=true, WEB_ORIGIN=https://<your-webui-domain>,
+  WORKSPACE_DIR=/data, optional VOICE_API_KEY/VOICE_API_URL. (PORT auto.)
+  - Env: OPENAI_API_KEY, OPENAI_BASE_URL (if OpenRouter), OPENAI_MODEL, DISCORD_TOKEN, ENABLE_WEB=true, WEB_ORIGIN=https://<your-webui-domain>,
+  WORKSPACE_DIR=/data, optional VOICE_API_KEY/VOICE_API_URL. (PORT auto.)
+  - Volume mounted at /data.
+
+  yagent-webui (static site):
+
+  You're going from a monorepo (yagent/ = backend src/ + web/) to two repos. Make each repo's build root the package root Zeabur detects:
+
+  - yagent-backend ← contents of yagent/ minus web/ (root has the backend package.json, src/, skills/, plugins/, tsconfig).
+  - yagent-webui ← contents of yagent/web/ at the repo root (so package.json, vite.config.ts, index.html, src/ are top-level).
+
+  Watch-out: web/src/types.ts is hand-synced with backend src/events.ts (there's a comment saying so). After the split that stays a manual
+  mirror — keep them in step when you change the event shape.
+
+  ---
+  Zeabur service config (summary)
+
+  yagent-backend (Node service, always-on):
+  - Build: npm install && npm run build · Start: npm start
+  - Env: OPENAI_API_KEY, OPENAI_BASE_URL (if OpenRouter), OPENAI_MODEL, DISCORD_TOKEN, ENABLE_WEB=true, WEB_ORIGIN=https://<your-webui-domain>,
+  WORKSPACE_DIR=/data, optional VOICE_API_KEY/VOICE_API_URL. (PORT auto.)
+  - Volume mounted at /data.
+
+  yagent-webui (static site):
+  - Zeabur auto-detects Vite → build npm run build, serve dist/.
+  - Build env: VITE_API_BASE=https://<your-backend-domain>.
+
+  Verify: open the webui domain → indicator goes live (WSS connected), sessions seed in (CORS GET works); send a message → timeline streams
+  (turn:start→tools→turn:end); DM the Discord bot → it replies and that session also appears in the web UI.
