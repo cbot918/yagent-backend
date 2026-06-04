@@ -165,7 +165,11 @@ export function createWebChannel(): Channel {
       try {
         const msg = JSON.parse(raw.toString()) as { type?: string; sessionKey?: string; text?: string };
         if (msg.type === 'send' && msg.sessionKey && msg.text && messageHandler) {
-          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text });
+          // Catch so a failing turn can't become an unhandled rejection (which
+          // would crash the whole process and drop every WebSocket).
+          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text }).catch((err) => {
+            console.error('[web] handler error:', err);
+          });
         }
       } catch {
         /* ignore malformed frames */

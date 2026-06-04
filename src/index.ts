@@ -30,7 +30,10 @@ async function main() {
 
   // --- Channels ---
   const useWeb = config.enableWeb || process.argv.includes('--web');
-  const useCli = !config.discordToken || process.argv.includes('--cli');
+  // CLI only with an explicit --cli, or as the interactive dev fallback when there's
+  // no Discord token AND we're attached to a real terminal. On a server (no TTY) this
+  // stays off, so it won't sit at a `you:` prompt reading stdin that never comes.
+  const useCli = process.argv.includes('--cli') || (!config.discordToken && process.stdin.isTTY === true);
   const channels: Channel[] = [];
   if (config.discordToken) channels.push(createDiscordChannel());
   if (useWeb) channels.push(createWebChannel());

@@ -57,52 +57,60 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
       console.log(`\n[loop] session=${sessionKey}`);
       bus.emitEvent({ type: 'turn:start', text, ts: Date.now(), ...meta });
 
-      while (iteration < MAX_ITERATIONS) {
-        const response = await complete(messages, tools);
-        const msg = response.choices[0].message;
-        messages.push(msg as Message);
+      try {
+        while (iteration < MAX_ITERATIONS) {
+          const response = await complete(messages, tools);
+          const msg = response.choices[0].message;
+          messages.push(msg as Message);
 
-        const toolCalls = (msg.tool_calls ?? []).map((tc) => ({
-          name: tc.function.name,
-          args: JSON.parse(tc.function.arguments) as Record<string, unknown>,
-        }));
+          const toolCalls = (msg.tool_calls ?? []).map((tc) => ({
+            name: tc.function.name,
+            args: JSON.parse(tc.function.arguments) as Record<string, unknown>,
+          }));
 
-        bus.emitEvent({
-          type: 'llm:response',
-          iteration: iteration + 1,
-          content: msg.content ?? undefined,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-          ts: Date.now(),
-          ...meta,
-        });
+          bus.emitEvent({
+            type: 'llm:response',
+            iteration: iteration + 1,
+            content: msg.content ?? undefined,
+            toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+            ts: Date.now(),
+            ...meta,
+          });
 
-        if (!msg.tool_calls || msg.tool_calls.length === 0) {
-          finalText = msg.content ?? '';
-          console.log(`[loop:${iteration + 1}] llm → final text`);
-          break;
+          if (!msg.tool_calls || msg.tool_calls.length === 0) {
+            finalText = msg.content ?? '';
+            console.log(`[loop:${iteration + 1}] llm → final text`);
+            break;
+          }
+
+          const names = msg.tool_calls.map((tc) => tc.function.name).join(', ');
+          console.log(`[loop:${iteration + 1}] llm → tool_calls: [${names}]`);
+
+          for (const tc of msg.tool_calls) {
+            const args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+            bus.emitEvent({ type: 'tool:call', iteration: iteration + 1, name: tc.function.name, args, ts: Date.now(), ...meta });
+            const result = await registry.run(tc.function.name, args, ctx);
+            console.log(`[loop:${iteration + 1}] tool: ${tc.function.name} → ${result.slice(0, 100)}`);
+            bus.emitEvent({ type: 'tool:result', iteration: iteration + 1, name: tc.function.name, result, ts: Date.now(), ...meta });
+            messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
+          }
+
+          iteration++;
         }
 
-        const names = msg.tool_calls.map((tc) => tc.function.name).join(', ');
-        console.log(`[loop:${iteration + 1}] llm → tool_calls: [${names}]`);
-
-        for (const tc of msg.tool_calls) {
-          const args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-          bus.emitEvent({ type: 'tool:call', iteration: iteration + 1, name: tc.function.name, args, ts: Date.now(), ...meta });
-          const result = await registry.run(tc.function.name, args, ctx);
-          console.log(`[loop:${iteration + 1}] tool: ${tc.function.name} → ${result.slice(0, 100)}`);
-          bus.emitEvent({ type: 'tool:result', iteration: iteration + 1, name: tc.function.name, result, ts: Date.now(), ...meta });
-          messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
+        if (!finalText) {
+          finalText = '[agent: reached max iterations without a final response]';
         }
 
-        iteration++;
+        const historyToSave = messages.slice(1); // drop system prompt
+        await saveSession(sessionKey, historyToSave);
+      } catch (err) {
+        // Never let a failed turn (bad API key, network, tool crash) take down the
+        // gateway. Surface the error as the reply so the UI unsticks and shows why.
+        finalText = `[agent error] ${err instanceof Error ? err.message : String(err)}`;
+        console.error('[loop] error:', err);
       }
 
-      if (!finalText) {
-        finalText = '[agent: reached max iterations without a final response]';
-      }
-
-      const historyToSave = messages.slice(1); // drop system prompt
-      await saveSession(sessionKey, historyToSave);
       bus.emitEvent({ type: 'turn:end', finalText, iterations: iteration + 1, ts: Date.now(), ...meta });
       await channel.sendReply(sessionKey, finalText);
     });
