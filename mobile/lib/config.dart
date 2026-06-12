@@ -1,12 +1,13 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Where the yagent backend lives. The agent runs on a host (Node + LLM keys);
-/// this app is only a client, so it needs that host's address. On a physical
-/// phone that's the dev machine's LAN IP (both on the same Wi-Fi), e.g.
-/// http://10.142.56.163:3001. Editable in-app and persisted across launches.
+/// this app is only a client, so it needs that host's address. Defaults to the
+/// deployed backend so the app works anywhere over the internet; for local dev
+/// point it at the dev machine's LAN IP (e.g. http://192.168.x.x:3001) via the
+/// in-app settings (⚙️). Editable in-app and persisted across launches.
 class AppConfig {
   static const _key = 'backendBaseUrl';
-  static const defaultBaseUrl = 'http://10.142.56.163:3001';
+  static const defaultBaseUrl = 'https://api-yagent.zeabur.app';
 
   String baseUrl;
   AppConfig(this.baseUrl);
