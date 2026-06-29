@@ -3,6 +3,8 @@ export interface IncomingMessage {
   text: string;
   /** Which virtual-company role to answer as (manual switchboard). */
   roleId?: string;
+  /** Per-turn override of the role's action mode (like plan/edit mode). */
+  actionMode?: 'act' | 'advise';
 }
 
 export type MessageHandler = (msg: IncomingMessage) => Promise<void>;

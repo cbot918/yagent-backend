@@ -35,6 +35,36 @@ export async function getRole(id?: string): Promise<Role> {
   return roles.find((r) => r.id === id) ?? DEFAULT_ROLE;
 }
 
+/** Fields the settings UI is allowed to edit (persona/identity stays immutable here). */
+export type RolePatch = Partial<
+  Pick<Role, 'model' | 'codingAgent' | 'tools' | 'skills' | 'knowledge' | 'actionMode'>
+>;
+
+/**
+ * Persist an edit to one role's configurable fields back to roles.json
+ * (files-as-truth). Only whitelisted fields are written; persona text and
+ * identity are untouched. Returns the updated role.
+ */
+export async function saveRole(id: string, patch: RolePatch): Promise<Role> {
+  const raw = await fs.readFile(ROLES_FILE, 'utf8');
+  const parsed = JSON.parse(raw) as { roles: Role[] };
+  const role = parsed.roles?.find((r) => r.id === id);
+  if (!role) throw new Error(`Unknown role "${id}"`);
+
+  const allowed: (keyof RolePatch)[] = ['model', 'codingAgent', 'tools', 'skills', 'knowledge', 'actionMode'];
+  const target = role as unknown as Record<string, unknown>;
+  for (const key of allowed) {
+    if (key in patch) {
+      const val = patch[key];
+      if (val === undefined || val === null) delete target[key];
+      else target[key] = val;
+    }
+  }
+
+  await fs.writeFile(ROLES_FILE, JSON.stringify(parsed, null, 2) + '\n');
+  return role;
+}
+
 /** The role's persona text: inline systemPrompt, else referenced skill body. */
 export async function resolvePersona(role: Role): Promise<string> {
   if (role.systemPrompt) return role.systemPrompt;

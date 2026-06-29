@@ -11,6 +11,9 @@ export const config = {
   enableWeb: process.env.ENABLE_WEB === 'true',
   // PORT is injected by most PaaS (Zeabur/Railway/etc); fall back to WEB_PORT then 3001.
   webPort: Number(process.env.PORT ?? process.env.WEB_PORT ?? 3001),
+  // When a PaaS injects PORT, bind that exact port (the platform routes to it).
+  // Locally (no PORT) we may auto-scan upward if the port is busy.
+  portFromPaaS: process.env.PORT != null,
   // Allowed CORS origin for the REST API when the frontend is deployed separately.
   // Set to the web UI's URL in prod; '*' is fine for local/demo.
   webOrigin: process.env.WEB_ORIGIN ?? '*',

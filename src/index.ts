@@ -8,6 +8,7 @@ import { shellTool } from './tools/shell.js';
 import { browseTool } from './tools/browse.js';
 import { saveMemoryTool } from './memory/memory.js';
 import { loadSkillTool } from './skills/loader.js';
+import { searchKnowledgeTool, readDocTool } from './tools/knowledge.js';
 import { dispatchCodingTool } from './tools/dispatchCoding.js';
 import { cliChannel } from './channels/cli.js';
 import { createDiscordChannel } from './channels/discord.js';
@@ -26,6 +27,8 @@ async function main() {
   registry.register(listFilesTool);
   registry.register(saveMemoryTool);
   registry.register(loadSkillTool);
+  registry.register(searchKnowledgeTool);
+  registry.register(readDocTool);
   registry.register(dispatchCodingTool);
   if (config.allowShell) registry.register(shellTool);
   if (config.allowBrowser) registry.register(browseTool);
@@ -38,7 +41,7 @@ async function main() {
   const useCli = process.argv.includes('--cli') || (!config.discordToken && process.stdin.isTTY === true);
   const channels: Channel[] = [];
   if (config.discordToken) channels.push(createDiscordChannel());
-  if (useWeb) channels.push(createWebChannel());
+  if (useWeb) channels.push(createWebChannel(registry));
   if (useCli) channels.push(cliChannel);
 
   // --- Plugins ---
@@ -50,7 +53,7 @@ async function main() {
   // --- Start all channels ---
   for (const ch of channels) {
     const agent = createAgent(registry, ch);
-    await ch.start((msg) => agent.handle(msg.sessionKey, msg.text, msg.roleId));
+    await ch.start((msg) => agent.handle(msg.sessionKey, msg.text, msg.roleId, msg.actionMode));
     console.log(`[gateway] channel started: ${ch.name}`);
   }
 }

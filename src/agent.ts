@@ -3,6 +3,7 @@ import { complete } from './llm.js';
 import { loadSession, saveSession, withSessionLock } from './session.js';
 import { getMemoryContext } from './memory/memory.js';
 import { loadSkillSummaries } from './skills/loader.js';
+import { readIndex } from './knowledge/loader.js';
 import { getRole, resolvePersona } from './roles/loader.js';
 import type { Role } from './roles/types.js';
 import { budgetGate, recordUsage, loadBilling, computeLlmCost } from './usage/index.js';
@@ -13,15 +14,32 @@ import type { Channel } from './channels/types.js';
 
 const MAX_ITERATIONS = 20;
 
+// In 'advise' (advisory-only) mode a role may use only these non-mutating tools.
+// Everything else (write_file/shell/browse/dispatch_coding_task/save_memory/…)
+// is withheld so the role can read + recommend but not act.
+const READONLY_TOOLS = new Set(['read_file', 'list_files', 'search_knowledge', 'read_doc', 'load_skill']);
+
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
 
-async function buildSystemPrompt(sessionKey: string, role: Role): Promise<string> {
+async function buildSystemPrompt(sessionKey: string, role: Role, mode: 'act' | 'advise'): Promise<string> {
   const memory = await getMemoryContext(sessionKey);
-  const skills = await loadSkillSummaries();
+
+  // Skills: scope to the role's own skills if set, else list all installed.
+  const allSkills = await loadSkillSummaries();
+  const skills =
+    role.skills && role.skills.length ? allSkills.filter((s) => role.skills!.includes(s.dir)) : allSkills;
   const skillList =
     skills.length > 0
       ? skills.map((s) => `- **${s.name}** (dir: \`${s.dir}\`): ${s.description}`).join('\n')
       : 'No skills installed.';
+
+  // Knowledge: always-on INDEX map + this role's bound reference docs.
+  const index = await readIndex();
+  const roleDocs =
+    role.knowledge && role.knowledge.length
+      ? role.knowledge.map((d) => `- \`${d}\``).join('\n')
+      : '';
+
   const persona = await resolvePersona(role);
   const harness = role.codingAgent ?? config.codingAgent;
 
@@ -36,22 +54,33 @@ ${memory}
 ${skillList}
 Call the \`load_skill\` tool to read a skill's full guidance before using it.
 
+## Knowledge base
+The company knowledge base lives under \`knowledge/\`. Use \`search_knowledge\` to find relevant docs and \`read_doc\` to read one in full. Ground answers in these docs rather than guessing about ElementAI.
+${roleDocs ? `\nYour reference docs (read them when relevant):\n${roleDocs}\n` : ''}${index ? `\nKnowledge map (INDEX):\n${index}` : ''}
+
 ## Delegating heavy coding
 For multi-file edits or building/running code, call \`dispatch_coding_task\` to delegate to an external coding agent (currently: ${harness}). Provide a precise, self-contained spec; you'll get back the diff/summary to review.
 
 ## Workspace
 ${config.workspaceDir}
 All file operations must stay within the workspace directory.
-
+${
+  mode === 'advise'
+    ? '\n## Mode: ADVISORY (read-only)\nYou are in advisory mode. You can read files, search the knowledge base, and load skills, but you must NOT take actions — no writing files, running shell, browsing, or delegating coding. Analyse and recommend concrete next steps instead; if an action is needed, say exactly what to run and who should do it.\n'
+    : ''
+}
 Think step by step. Use tools to act, observe results, then continue or respond.`;
 }
 
 export function createAgent(registry: ToolRegistry, channel: Channel) {
-  async function handle(sessionKey: string, text: string, roleId?: string) {
+  async function handle(sessionKey: string, text: string, roleId?: string, actionMode?: 'act' | 'advise') {
     await withSessionLock(sessionKey, async () => {
       const role = await getRole(roleId);
+      // Effective mode: per-turn override (like plan/edit mode) wins over the
+      // role's default; default is 'act'.
+      const mode: 'act' | 'advise' = actionMode ?? role.actionMode ?? 'act';
       const history = (await loadSession(sessionKey)) as Message[];
-      const systemPrompt = await buildSystemPrompt(sessionKey, role);
+      const systemPrompt = await buildSystemPrompt(sessionKey, role, mode);
 
       const messages: Message[] = [
         { role: 'system', content: systemPrompt },
@@ -59,12 +88,14 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
         { role: 'user', content: text },
       ];
 
-      // A role may restrict which tools it can use (undefined/empty = all).
+      // A role may restrict which tools it can use (undefined/empty = all);
+      // advisory mode further restricts to read-only tools.
       const allTools = registry.toOpenAIFormat();
-      const tools =
+      let tools =
         role.tools && role.tools.length
           ? allTools.filter((t) => role.tools!.includes(t.function.name))
           : allTools;
+      if (mode === 'advise') tools = tools.filter((t) => READONLY_TOOLS.has(t.function.name));
       const model = role.model || config.model;
       // Attribute orchestrator spend to a provider/key for budgeting.
       const provider = config.openaiBaseUrl.includes('openrouter') ? 'openrouter' : 'openai';

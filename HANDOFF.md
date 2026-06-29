@@ -1,0 +1,162 @@
+# agent-os — Session Handoff
+
+> ⚡ **快速掌握請先讀 `ARCHITECTURE.md`**（架構速覽 + **任務狀態總列表** + 現在狀態，由 `skills/agentos-arch` 維護）。本檔是詳細交接背景與 Task 3/4 規格。
+> 撰寫於 2026-06-29。給「換 session 後接手」用的無上下文交接文件。
+> 先讀 `CLAUDE.md` 的 **「agent-os layer」** 章節（最權威的現況說明），再讀這份。
+> 另有自動記憶在 `~/.claude/projects/-Users-yale-Documents-coding-ElementAI-openclaw-proj-yagent/memory/`（`agent-os-direction.md`、`claude-code-billing-caution.md`）。
+
+---
+
+## 0. 一句話定位
+
+`agent-os` = 蓋在 `yagent` 上的「編排/觸發/介面層」，包住**可抽換的 coding harness**，跑一個**虛擬公司**（手動切換 role），帶**費用/預算監測**。純自用、商業產品等級（**內容要專業，不要隨便生成大概的**）。
+
+**重要決策：直接在 `yagent` repo 內就地開發**，不是複製到 `../agent-os/`（`../agent-os/HANDOFF.md` 只是最初的設計調研note，保留即可）。工作目錄＝`/Users/yale/Documents/coding/ElementAI/openclaw-proj/yagent`。
+
+---
+
+## 1. 目前已完成（builds green，已驗證）
+
+前一個 session 已疊了三層 + web dashboard，`npm run build`（後端 tsc）與 `web` 的 `vue-tsc + vite build` 皆綠燈，`/api/roles`、`/api/usage` 已實機 curl 過。
+
+**A. Agent-agnostic coding harness** — `src/coding-agent/`
+- `types.ts`：`CodingAgent` 介面（`run(task, onEvent) → CodingResult`）+ `NormalizedEvent`。
+- `index.ts`：`getCodingAgent(name=config.codingAgent)` 按 `CODING_AGENT` 切 `claude | opencode`（鏡像 `sandbox/index.ts` 的 switch+cache+shutdown cleanup）。
+- `claude.ts`：spawn `claude -p --output-format stream-json --verbose`（+`--dangerously-skip-permissions` 若 `CLAUDE_YOLO`），parse NDJSON（`assistant`→事件、`result`→summary/`total_cost_usd`/`usage`）。**已對 Claude Code v2.1.183 驗證輸出格式。**
+- `opencode.ts`：spawn `opencode run -m <model>`，OpenRouter 走 `OPENCODE_MODEL`+`OPENROUTER_API_KEY`。opencode 目前本機未安裝。
+- `runtime.ts`：追蹤子行程、shutdown 時 killAll。
+- 派工工具：`src/tools/dispatchCoding.ts`（`dispatch_coding_task`）—— 阻塞回傳 diff/摘要字串給 loop，過程 emit `dispatch:*` 到 bus。**Tool 介面沒改。**
+
+**B. 虛擬公司 roles（手動切換 switchboard）** — `src/roles/`
+- `types.ts`：`Role = { id, name, title?, emoji?, description, systemPrompt?, skill?, model?, codingAgent?, tools?[] }`。
+- `loader.ts`：`loadRoles()` 讀 `roles/roles.json`、`getRole(id)`、`resolvePersona(role)`（inline systemPrompt 或載 skill body）、`DEFAULT_ROLE`。
+- 種子資料 `roles/roles.json`：目前有 **ceo / coo / engineer**（範例級，**之後可能要被新角色取代或並存，待用戶決定**）。
+- `src/agent.ts` 已 role-aware：`handle(sessionKey, text, roleId?)` → 解析 role → persona 進 system prompt、選 model、依 `role.tools` 過濾工具、設 `ctx.roleId`/`ctx.codingAgent`。
+- `src/llm.ts` `complete()` 多了 `model` 參數。
+
+**C. 費用/預算監測（觀測 + 上限執行）** — `src/usage/`
+- `types.ts`：`UsageEntry / KeyAccount / Budget / BudgetStatus / BillingConfig`。
+- `billing.ts`：讀 `billing.json`（keys、budgets、pricing 價表）+ `computeLlmCost()`。
+- `ledger.ts`：append `.usage/ledger.jsonl`（files-as-truth）、`readUsage()`、`summarize()`。
+- `index.ts`：`recordUsage()`（append+emit `cost:update`+超額 emit `budget:alert`）、`budgetGate()`（turn/dispatch 前置關卡，超額擋下）、`evaluateBudgets()`。
+- 接點：`agent.ts` 每次 `complete()` 後 `recordUsage`、loop 前 `budgetGate`；`dispatchCoding.ts` run 前 gate、run 後 record。
+- 種子 `billing.json`：keys(openrouter/openai/claude)、budgets(global $50、claude key $30)、pricing 表。
+
+**D. 事件 / REST**（`src/events.ts`、`src/channels/web.ts`）
+- `BaseEvent` 多了 `roleId?`。新事件：`dispatch:start|event|end`、`cost:update`、`budget:alert`。
+- 新 REST：`GET /api/roles`、`GET /api/usage`（皆唯讀）。
+
+**E. Web dashboard**（`web/`，**Next.js 15 App Router + shadcn/ui + Zustand**，static export → `web/dist`）
+- `lib/types.ts`：鏡像上述事件 + Role/Usage 型別 + view model（`DispatchStep`、`Turn.dispatches`）。
+- `lib/store.ts`（Zustand + immer）：`view: 'dashboard'|'session'`、`roles`、`usage`、`alerts`；actions `loadRoles/loadUsage/openRole/showDashboard`；`apply()` 處理 dispatch/cost/budget。
+- `components/Dashboard.tsx`：grid 著陸頁 = **成員卡**（點→`openRole` 建 `web-<roleId>-<rand>` session 對談）+ **workflow 卡（停用佔位）** + **budget 面板**。
+- `components/DispatchCard.tsx`：timeline 內渲染派工進度。`app/page.tsx` 切 dashboard↔session。`components/SessionView.tsx` 帶 roleId 送訊 + 顯示成員。
+- `lib/useAgentSocket.ts` 的 `send(sessionKey, text, roleId?)`。
+
+**規約/地雷**
+- ESM + NodeNext：相對 import **一律 `.js` 副檔名**；config 集中 `src/config.ts`。
+- `roles/roles.json`、`billing.json` 用 `path.resolve('./...')`，**cwd-relative → 一定要從 repo 根目錄跑**（`node dist/index.js` 要 `cd` 到 yagent 根）。
+- **Claude 計費**：`dispatch CODING_AGENT=claude` 只有在 **`ANTHROPIC_API_KEY` 未設**時才吃訂閱，否則靜默走按量。在 Claude Code 自己的 sandbox Bash 裡 `claude -p` 會 401（`apiKeySource:none`）—— 那是 sandbox 取不到 OAuth，用戶真實終端機正常。
+- 協定改動要同步 `web/lib/types.ts` + `web/lib/store.ts`（+ 日後 `mobile/lib/store.dart`，目前 **mobile 尚未跟進** agent-os 的新事件/端點）。
+- 沒有 test/lint runner；`npm run build`（後端 tsc strict）＋ `npm --prefix web run build`（`next build`，含型別檢查 + 靜態匯出）是唯二自動檢查。
+
+**指令**：`npm run dev:all`（後端:3001 + Vite:5173）→ 開 http://localhost:5173。`npm run dev:cli` 最快 dev loop。
+
+---
+
+## 2. 待辦（多 task 規劃，2026-06-29 用戶重新拆解）
+
+> 用戶原話重點：**「我要專業的唷 不要隨便生成大概的，我這是商業產品。」** → role 的 persona/知識/技能必須專業、具體、可商用，不能是泛泛 template。
+
+> 進度註記：**Task 1（web 前端重構為 Next.js + shadcn + Zustand）已完成並驗證**（見 §1.E）。
+> roles.json 的 **13 個角色 persona 已由用戶寫好**（以 `docs/company-plan.md` 為策略源），所以原「新增角色」項目已不需要。
+
+### Task 2 — 知識/技能層（**✅ 完成並驗證，2026-06-29**）
+
+讓 13 個角色「專業可用」。已與用戶確認：**三項全做**、knowledge/ 為唯一文件庫、記憶走 knowledge/skills 檔案（**不動 `memory.ts`**，維持 per-session 對話記憶）。
+> 驗證：backend+web build 綠燈；knowledge loader/tools/path-guard 單測過；**真 LLM E2E** — SA 角色問「接案報價檢查清單」自動 `read_doc finance/unit-economics.md` 並 grounded 回答 + 標來源。port 自動遞增實測 3001→3004。
+
+1. **L2 知識庫 + 檢索工具**：建 `knowledge/` + `knowledge/INDEX.md`；`docs/company-plan.md` 移入 `knowledge/`。新增 `search_knowledge` + `read_doc` 兩個 tool（root 鎖在 `knowledge/`，沿用 `readFile.ts` 的 `resolveInWorkspace` path-guard 模式，另寫 `resolveInKnowledge`）；`src/index.ts` 註冊。
+2. **各角色專業 SKILL.md**：為角色線撰寫專業 playbook（行銷漏斗/內容/PRD/系統設計/code 委派/DevOps runbook/報價…），放 `skills/`，按需 `load_skill`。
+3. **角色綁定專屬知識**：`roles/roles.json` 為每個角色加 `knowledge?: string[]`（與 `skills?: string[]`），注入 system prompt 成「你的參考文件」並可被 search/read 檢索。
+- 設計原則：分層 + 檔案優先 agentic retrieval（L1 常駐 INDEX / L2 隨選文件庫 / L3 才上向量 / L4 活資料走 MCP）；**不 fine-tune**；漸進式揭露（索引常駐、全文按需）。
+- 順手：backend `web.ts` 加 **port 自動遞增**（EADDRINUSE 時 +1 往上找；但 PaaS 有 `process.env.PORT` 時不掃，照平台指定）。
+
+### Task 3 — 權限/委派（**✅ 完成並驗證，2026-06-29**）
+
+> 用戶 Q&A：(a)「給我個權限設定頁面，也可以設定各 agent 綁定的 model，然後預留一個 harness 或服務接口可以抽換」；(b)「互相委派 → 在每個 agent 上設計開關，可切換哪個角色要有動作或不要有動作（類似 plan mode / edit mode）」。
+
+1. ✅ **權限設定頁**（`web/components/Settings.tsx`）：每角色 tools 白名單 + model + harness；`POST /api/roles/:id` 寫回 `roles.json`（`saveRole`）。入口：Dashboard ⚙ Settings 按鈕 + 角色卡 ⚙ 齒輪。
+2. ✅ **可抽換 harness**：`coding-agent/index.ts` 的 `factories` registry（加 factory 即可）；`listCodingAgents()` → `GET /api/agents`，設定頁下拉選。
+3. ✅ **動作開關**：`role.actionMode`（act/advise）per-role 預設 + 聊天室即時切換（`SessionView` 開關 → WS `send.actionMode` → `handle(...,actionMode)`）。advise 時工具過濾成 `READONLY_TOOLS`（讀檔/查知識/載技能），不能寫檔/shell/browse/dispatch。
+> 驗證：backend+web build 綠燈；`/api/tools`、`/api/agents`、`POST /api/roles/:id` curl 過；UI 點齒輪→改 advise→儲存→寫回 roles.json；真 LLM E2E：engineer advise 模式被要求寫檔 → 零 mutating tool call。
+> ⚠️ 協定有變（Role.actionMode、新 REST、WS send.actionMode），`mobile/` 仍未跟進。
+
+### Task 4 — Sidebar 重構（**✅ 完成並驗證，2026-06-29**）
+
+常駐左側 sidebar（`web/components/Sidebar.tsx`，桌機 static 欄 / 手機 `Sheet` drawer 共用），分四個可收合區：
+- **Sessions** — 複用 `SessionList`（New web chat + 列表）。
+- **Virtual company** — 角色精簡 row（點→`openRole`、齒輪→`showSettings(role.id)`）+ workflow `soon` 佔位 + 一行 `Projects · soon`（projects 未做）。
+- **Budget & spend** — `web/components/BudgetPanel.tsx`：總花費 + budget 進度條，keys/subscriptions 收進可展開區（從 `Dashboard.tsx` 搬出）。
+- **Settings** — 入口按鈕 → `showSettings()`（Task 3 設定頁，渲染於主內容區）。
+
+主內容區依 `view` 切：`session`→`SessionView`、`settings`→`Settings`、`welcome`（預設）→歡迎空狀態。`Dashboard.tsx` 已刪；`store.ts` 的 `view` 去 `dashboard`、加 `welcome`，`showDashboard`→`showHome`（清 selected、回 welcome）。
+> 驗證：`npm --prefix web run build` 綠燈；preview E2E（桌機四區渲染/可收合、角色 row 開聊、齒輪進角色設定、budget 展開 keys、手機 ☰ drawer 完整 sidebar）皆過，console 無 error。
+> **純前端、未動後端/協定** → 此項不需同步 `mobile/`（但先前 Task 2/3 的新事件/端點 mobile 仍未跟進）。
+
+---
+
+## 3. 需要先跟用戶釐清的問題（做之前務必互動，才能「專業而非泛泛」）
+
+1. **公司的實際產品/領域是什麼？**（最關鍵）—— 沒有業務脈絡寫不出專業的 CTO/SA/Marketing persona。請用戶給：產品是什麼、目標客群、技術棧、商業模式。
+2. **語言**：persona/知識/skills 要用繁中、英文、還是中英混？
+3. **角色釐清**：
+   - `Marketing` vs `數位行銷長 (CDMO)` 的分工/層級差異？（一個執行/經理層、一個 C-level 策略？）
+   - `SA` 是指 **Solutions Architect / Systems Analyst / Sales**？（科技語境多半 Solutions Architect，需確認）
+   - `Devops`、`CTO` 的職責邊界與彼此關係？
+4. **既有 ceo/coo/engineer**：保留、取代、還是合併進新陣容？
+5. **每角色的 harness/model**：哪些 role 要能 `dispatch_coding_task`（CTO/Devops/Engineer 類），哪些純諮詢（行銷類用便宜模型）？
+6. **設定頁範圍**：只編 roles.json + billing.json，還是也要在 UI 管 knowledge 檔案與 MCP server 連線？MCP 管理是較大的一塊，要不要這輪就做？
+7. ⚠️ **記憶模型決策**：目前 memory 是 **per-session**（`.memory/{sessionKey}.md`），**不是 per-role**。用戶要「給角色的記憶」→ 兩個選項，請確認方向：
+   - (a) 角色長期知識改用 **skills / `knowledge/` 文件**承載（推薦，符合現架構）；
+   - (b) 真要 per-role 持久記憶，需新增 role-scoped memory（例如 `.memory/role-<id>.md` 並在 system prompt 注入）—— 這要改 `memory.ts` 與 `agent.ts`。
+
+---
+
+## 4. 關鍵檔案地圖
+
+```
+src/
+  agent.ts                role-aware loop + budgetGate + recordUsage 接點
+  llm.ts                  complete(messages, tools, model)
+  config.ts              所有 env（CODING_AGENT/CLAUDE_*/OPENCODE_*/OPENROUTER_API_KEY…）
+  events.ts              AgentEvent union（含 dispatch:*/cost:*/budget:*、BaseEvent.roleId）
+  coding-agent/          types/index/claude/opencode/runtime
+  roles/                 types(+skills?/knowledge? 欄位)/loader  (+ 根目錄 roles/roles.json 資料)
+  usage/                 types/billing/ledger/index  (+ 根目錄 billing.json 資料)
+  knowledge/loader.ts    L2 文件庫：resolveInKnowledge(path guard)/listDocs/readIndex/readDoc/searchKnowledge
+  tools/                 types(ToolContext)；readFile/writeFile(path guard 範本)/listFiles/
+                         knowledge(search_knowledge+read_doc)/dispatchCoding…
+  channels/web.ts        REST(handleApi) + /ws + listenWithRetry(port 自動遞增)；要加 settings 寫入端點就改這
+  skills/loader.ts       skill 載入（name=line1, desc=line2, body 按需）
+roles/roles.json          ★ 13 角色（已含 skills[]/knowledge[] 綁定）
+knowledge/                ★ INDEX.md + company/ product/ engineering/ finance/ 文件庫（company-plan.md 已移入）
+skills/                   ★ content-playbook/prd-writing/system-design/code-delegation/deploy-runbook/quoting-bd/brand-messaging
+billing.json              ★ keys/budgets/pricing
+web/  (Next.js 15 App Router + shadcn/ui + Zustand，static export → web/dist)
+  lib/types.ts            ★ 協定鏡像（改後端事件要同步）
+  lib/store.ts            ★ Zustand+immer：apply() reducer + view/roles/usage/alerts
+  components/Dashboard.tsx 成員卡/workflow卡/budget面板（budget 要搬去 settings）
+  app/page.tsx            view 切換（要加 'settings'）
+  components/ui/          shadcn primitives（button/card/input/badge/collapsible/progress/sheet/scroll-area）
+CLAUDE.md                 「agent-os layer」章節 = 現況權威說明
+~/.claude/.../memory/     agent-os-direction.md, claude-code-billing-caution.md
+```
+
+計畫檔（舊）：`/Users/yale/.claude/plans/parsed-cooking-galaxy.md`（agent-os 整體分階段計畫，可參考）。
+
+---
+
+## 5. 接手後的建議第一步
+
+先用第 3 節的問題跟用戶對齊（尤其 Q1 產品領域、Q3 角色定義、Q7 記憶模型），拿到業務脈絡後，再開始產 role 內容 + L2 知識工具 + 設定頁。**切勿在沒有業務脈絡下硬生成 persona** —— 用戶明確要求商用級、專業、不要泛泛。

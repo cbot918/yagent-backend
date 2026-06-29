@@ -7,10 +7,13 @@ import { config } from '../config.js';
 import { bus } from '../events.js';
 import { loadSession } from '../session.js';
 import { readMemory } from '../memory/memory.js';
-import { loadRoles } from '../roles/loader.js';
+import { loadRoles, saveRole } from '../roles/loader.js';
+import type { RolePatch } from '../roles/loader.js';
+import { listCodingAgents } from '../coding-agent/index.js';
 import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
 import type { Channel, MessageHandler } from './types.js';
+import type { ToolRegistry } from '../tools/types.js';
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024; // Whisper's per-request limit
 
@@ -31,6 +34,34 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
     });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
+  });
+}
+
+/**
+ * Listen on `startPort`, scanning upward on EADDRINUSE up to `maxExtra` times.
+ * Resolves with the port actually bound. maxExtra=0 → try exactly one port
+ * (used on a PaaS, where the injected PORT must be honoured).
+ */
+function listenWithRetry(server: http.Server, startPort: number, maxExtra: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let port = startPort;
+    let tries = 0;
+    const onError = (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && tries < maxExtra) {
+        tries++;
+        port++;
+        console.warn(`[web] port ${port - 1} in use, trying ${port}…`);
+        server.listen(port);
+      } else {
+        server.off('error', onError);
+        reject(err);
+      }
+    };
+    server.on('error', onError);
+    server.listen(port, () => {
+      server.off('error', onError);
+      resolve(port);
+    });
   });
 }
 
@@ -70,7 +101,12 @@ async function listSessionKeys(): Promise<string[]> {
   }
 }
 
-async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+async function handleApi(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  registry: ToolRegistry,
+): Promise<boolean> {
   const { pathname } = url;
   if (!pathname.startsWith('/api/')) return false;
 
@@ -98,8 +134,35 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return true;
   }
 
-  if (pathname === '/api/roles') {
+  if (pathname === '/api/roles' && req.method === 'GET') {
     sendJson(res, 200, { roles: await loadRoles() });
+    return true;
+  }
+
+  // Available tool names (for the settings UI tool allowlist).
+  if (pathname === '/api/tools') {
+    sendJson(res, 200, { tools: registry.getAll().map((t) => ({ name: t.name, description: t.description })) });
+    return true;
+  }
+
+  // Available coding harnesses (the swappable-harness registry).
+  if (pathname === '/api/agents') {
+    sendJson(res, 200, { agents: listCodingAgents() });
+    return true;
+  }
+
+  // Persist a role config edit: POST /api/roles/:id  { model?, codingAgent?, tools?, skills?, knowledge?, actionMode? }
+  const roleMatch = pathname.match(/^\/api\/roles\/([^/]+)$/);
+  if (roleMatch && req.method === 'POST') {
+    const id = decodeURIComponent(roleMatch[1]);
+    try {
+      const body = (await readBody(req)).toString('utf8');
+      const patch = (body ? JSON.parse(body) : {}) as RolePatch;
+      const updated = await saveRole(id, patch);
+      sendJson(res, 200, { role: updated });
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+    }
     return true;
   }
 
@@ -156,18 +219,24 @@ async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, 
   }
 }
 
-export function createWebChannel(): Channel {
+export function createWebChannel(registry: ToolRegistry): Channel {
   let messageHandler: MessageHandler;
   const clients = new Set<WebSocket>();
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
-    handleApi(req, res, url).then((handled) => {
+    handleApi(req, res, url, registry).then((handled) => {
       if (!handled) void serveStatic(req, res, url);
     });
   });
 
   const wss = new WebSocketServer({ server, path: '/ws' });
+  // In `{ server }` mode the WSS re-emits the http server's listen errors; without
+  // a handler an EADDRINUSE during port-scanning would crash as an unhandled
+  // 'error'. Swallow it here — listenWithRetry drives the actual retry/reject.
+  wss.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code !== 'EADDRINUSE') console.error('[web] websocket server error:', err);
+  });
 
   // Fan every agent event out to all connected browsers.
   bus.onEvent((event) => {
@@ -187,11 +256,12 @@ export function createWebChannel(): Channel {
           sessionKey?: string;
           text?: string;
           roleId?: string;
+          actionMode?: 'act' | 'advise';
         };
         if (msg.type === 'send' && msg.sessionKey && msg.text && messageHandler) {
           // Catch so a failing turn can't become an unhandled rejection (which
           // would crash the whole process and drop every WebSocket).
-          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text, roleId: msg.roleId }).catch((err) => {
+          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text, roleId: msg.roleId, actionMode: msg.actionMode }).catch((err) => {
             console.error('[web] handler error:', err);
           });
         }
@@ -206,8 +276,9 @@ export function createWebChannel(): Channel {
 
     async start(onMessage: MessageHandler) {
       messageHandler = onMessage;
-      await new Promise<void>((resolve) => server.listen(config.webPort, resolve));
-      console.log(`[web] UI server on http://localhost:${config.webPort} (ws: /ws)`);
+      // On a PaaS (PORT injected) bind exactly; locally scan upward if busy.
+      const port = await listenWithRetry(server, config.webPort, config.portFromPaaS ? 0 : 10);
+      console.log(`[web] UI server on http://localhost:${port} (ws: /ws)`);
     },
 
     // No-op: the browser renders replies from the `turn:end` event on the bus,

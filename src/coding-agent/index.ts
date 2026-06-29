@@ -15,23 +15,33 @@ export type { CodingAgent, CodingTask, CodingResult, NormalizedEvent } from './t
 const cache = new Map<string, CodingAgent>();
 let cleanupInstalled = false;
 
+/**
+ * The harness registry — the single extension point for swappable coding
+ * harnesses / external services. Add a backend by adding a factory here; it
+ * then becomes selectable per-role in the settings UI (GET /api/agents reads
+ * this). Mirrors the sandbox Executor registry pattern.
+ */
+const factories: Record<string, () => CodingAgent> = {
+  claude: createClaudeAdapter,
+  opencode: createOpencodeAdapter,
+};
+
+/** Names of the available harnesses (for the settings UI / GET /api/agents). */
+export function listCodingAgents(): string[] {
+  return Object.keys(factories);
+}
+
 export function getCodingAgent(name: string = config.codingAgent): CodingAgent {
   installCleanup();
 
   const cached = cache.get(name);
   if (cached) return cached;
 
-  let agent: CodingAgent;
-  switch (name) {
-    case 'claude':
-      agent = createClaudeAdapter();
-      break;
-    case 'opencode':
-      agent = createOpencodeAdapter();
-      break;
-    default:
-      throw new Error(`Unknown CODING_AGENT="${name}" (expected claude | opencode)`);
+  const factory = factories[name];
+  if (!factory) {
+    throw new Error(`Unknown CODING_AGENT="${name}" (expected: ${listCodingAgents().join(' | ')})`);
   }
+  const agent = factory();
 
   cache.set(name, agent);
   return agent;
