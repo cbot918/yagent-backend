@@ -9,6 +9,7 @@
     { "id": "claude-monthly", "scope": "key", "match": "claude", "limitUSD": 30, "periodDays": 30 }
   ],
   "pricing": {
+    "minimax/minimax-m2.5": { "inUSDPerM": 0.3, "outUSDPerM": 1.2 },
     "gpt-4o-mini": { "inUSDPerM": 0.15, "outUSDPerM": 0.6 },
     "google/gemini-2.0-flash": { "inUSDPerM": 0.1, "outUSDPerM": 0.4 },
     "google/gemini-flash-1.5": { "inUSDPerM": 0.075, "outUSDPerM": 0.3 },

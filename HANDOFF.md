@@ -1,7 +1,7 @@
 # agent-os — Session Handoff
 
 > ⚡ **快速掌握請先讀 `ARCHITECTURE.md`**（架構速覽 + **任務狀態總列表** + 現在狀態，由 `skills/agentos-arch` 維護）。本檔是詳細交接背景與 Task 3/4 規格。
-> 撰寫於 2026-06-29。給「換 session 後接手」用的無上下文交接文件。
+> 撰寫於 2026-06-29；最後更新 2026-06-29（Task 4 完成 + 首次上線 Zeabur，見 §2.5）。給「換 session 後接手」用的無上下文交接文件。
 > 先讀 `CLAUDE.md` 的 **「agent-os layer」** 章節（最權威的現況說明），再讀這份。
 > 另有自動記憶在 `~/.claude/projects/-Users-yale-Documents-coding-ElementAI-openclaw-proj-yagent/memory/`（`agent-os-direction.md`、`claude-code-billing-caution.md`）。
 
@@ -103,6 +103,38 @@
 主內容區依 `view` 切：`session`→`SessionView`、`settings`→`Settings`、`welcome`（預設）→歡迎空狀態。`Dashboard.tsx` 已刪；`store.ts` 的 `view` 去 `dashboard`、加 `welcome`，`showDashboard`→`showHome`（清 selected、回 welcome）。
 > 驗證：`npm --prefix web run build` 綠燈；preview E2E（桌機四區渲染/可收合、角色 row 開聊、齒輪進角色設定、budget 展開 keys、手機 ☰ drawer 完整 sidebar）皆過，console 無 error。
 > **純前端、未動後端/協定** → 此項不需同步 `mobile/`（但先前 Task 2/3 的新事件/端點 mobile 仍未跟進）。
+
+---
+
+## 2.5 部署現況 / Production（Zeabur）— 2026-06-29 首次上線
+
+兩個 GitHub repo（**embedded git，分開部署**），各自 Zeabur 服務：
+
+| 元件 | 本機路徑 | GitHub remote | branch | Zeabur 服務 | URL |
+|---|---|---|---|---|---|
+| Backend | repo 根 | `cbot918/yagent-backend` | `main` | `yagent-backend` | https://api-yagent.zeabur.app |
+| Web | `web/`（nested repo） | `cbot918/yagent-web` | `master` | `yagent-web` | https://yagent1.zeabur.app |
+
+> ⚠️ 後端在 `feature/memory` 開發，但 **production 從 `main` 部署** → 要上線得 `git checkout main && git merge --ff-only feature/memory && git push origin main`。web 直接在 `master`。
+> ⚠️ web 是 **embedded git repo（gitlink）**，`web/node_modules`、`web/dist` 已 `git rm --cached` 不再追蹤（`.gitignore` 本來就忽略；部署是 build-from-source）。改完 web 要在 `web/` 內 commit + `git push origin master`，再回根 `git add web` 更新 gitlink。
+
+**已上線 commit**：backend `b2b22ac`（main）、web `596820c`（master）。兩邊 build-from-source（backend tsc、web `next build`）。
+
+**Zeabur 操作路徑（給 agent 用）**：token 放在 repo 根 `./kk`（gitignored），格式是 `zeabur: sk-xxx`（**冒號後那段**才是 token）。GraphQL endpoint `https://api.zeabur.com/graphql`，header `Authorization: Bearer <token>`。introspection 被關，常用查詢：
+- 列服務：`query { projects { edges { node { _id name services { _id name } } } } }`
+- 環境：`query { environments(projectID:"<proj>") { _id name } }`
+- 讀環境變數：`query { service(_id:"<svc>"){ variables(environmentID:"<env>"){ key value } } }`
+- 觸發重部署（rebuild from latest commit）：`mutation { redeployService(serviceID:"<svc>", environmentID:"<env>") }`
+- 部署狀態：`query { deployments(serviceID, environmentID){ edges { node { _id status createdAt } } } }`；build log：`query { buildLogs(deploymentID:"<dep>"){ message timestamp } }`（亂序，要按 timestamp sort）。
+
+**ID 速查**：project `Agent`=`6a030b0a58ee177a59cb6f9e`；env `production`=`6a030b0ae5ed304c1d84bdec`；svc `yagent-backend`=`6a21a020e957fb053c54e379`、`yagent-web`=`6a219a97e957fb053c54e2d2`。
+
+**地雷 / 已知問題**：
+1. **web 是 `output: 'export'` 靜態站** → Zeabur 預設會跑 `next start`（對 export 會 crash：`"next start" does not work with "output: export"`）。靠 `web/zbpack.json`（`build_command: npm run build` + `output_dir: dist`）強制當靜態站服務 `dist/`。**別刪這檔**。
+2. **GitHub→Zeabur auto-deploy webhook 那次沒自動觸發**（push 後要手動 `redeployService`）。新 session 若 push 後 production 沒更新，先查 Zeabur↔GitHub app 連線，或直接 `redeployService`。
+3. **env 已對齊**：backend Zeabur 變數與本機 `.env` 關鍵值一致，且已設 `WEB_ORIGIN=https://yagent1.zeabur.app`（CORS）。`PORT` 由平台注入別設。web 服務不需 runtime env（`NEXT_PUBLIC_API_BASE` 在 `web/.env.production` build 時 inline）。
+4. **待清**：web 服務還留著舊 Vue 時代的死變數 `VITE_API_BASE`（Next 不讀，無害，可選擇刪）。
+5. **持久化**：Zeabur 檔案系統 ephemeral → `.sessions/`、`.memory/`、`.usage/ledger.jsonl` 重新部署會消失，要持久得掛 volume（尚未處理）。
 
 ---
 

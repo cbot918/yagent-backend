@@ -2,7 +2,7 @@
 
 > **開新 session 的單一入口**：先讀這份，掌握「這是什麼 + 架構速覽 + 任務總列表 + 現在狀態」。
 > 深度參考：`CLAUDE.md`（架構權威）、`HANDOFF.md`（詳細交接背景與 Task 3/4 規格）、`knowledge/INDEX.md`（公司/產品知識）。
-> **維護者**：`skills/agentos-arch`。完成/變更任務或動到架構時，回來更新本檔（§3 任務、§2 架構、§4 狀態）。最後更新：2026-06-29（Task 4 完成）。
+> **維護者**：`skills/agentos-arch`。完成/變更任務或動到架構時，回來更新本檔（§2 架構、§3 任務、§4 功能清單、§5 狀態）。最後更新：2026-06-30（新增 §4 功能清單）。
 
 ---
 
@@ -43,9 +43,44 @@
 | 3 | 權限/委派 | ✅ 完成並驗證 | 設定頁（每角色 tools 白名單 + model + harness）寫回 roles.json（`POST /api/roles/:id`）；harness registry 可擴充（`/api/agents`）；**動作模式** act/advise＝per-role 預設 + 聊天即時切換，advise 過濾成唯讀工具。E2E 過。 |
 | 4 | Sidebar 重構 | ✅ 完成並驗證 | 常駐左側 sidebar（`Sidebar.tsx`）分四區：Sessions / Virtual company（角色+workflow+projects 佔位）/ Budget & spend（`BudgetPanel.tsx` 精簡+可展開）/ Settings。移除獨立 Dashboard 全頁，主區改 `welcome`/`session`/`settings`。桌機 static 欄、手機 `Sheet` drawer。build 綠燈 + preview E2E 過。 |
 
-## 4. 現在狀態 / 下一步
+## 4. 功能清單 / 能力與邊界（Feature inventory）
+
+> 「系統會什麼、不會什麼」的盤點。新增/移除能力時回來更新。狀態：✅ 已做並驗證｜⚠️ 有但有限制／陷阱｜❌ 沒做｜🔜 deferred（已規劃未做）。
+
+### 4.1 已具備的能力（✅）
+
+| 能力 | 狀態 | 邊界 / 說明 |
+|---|---|---|
+| 虛擬公司 13 角色，**手動切換 switchboard** | ✅ | 由**使用者挑一個角色**對話。角色之間**彼此不可見、不能互相派工**（見 §4.2）。`roles/roles.json`。 |
+| 角色可設定：persona / model / codingAgent / tools 白名單 / skills / knowledge / actionMode | ✅ | persona 檔案授權；其餘可在設定頁編輯，`POST /api/roles/:id` 寫回 JSON。 |
+| Role-aware agent loop（≤20 輪 tool-calling、per-session lock、每回合重建 system prompt） | ✅ | `src/agent.ts`。 |
+| 工具：read_file / write_file / list_files / save_memory / load_skill / search_knowledge / read_doc / dispatch_coding_task | ✅ | path-guard 鎖在 workspace/knowledge。 |
+| 工具（gated）：shell / browse | ⚠️ | 需 `ALLOW_SHELL` / `ALLOW_BROWSER`；shell 有沙箱後端，browse 有 SSRF guard。 |
+| **委派寫程式 `dispatch_coding_task` → 外部 coding harness** | ✅ | 派給 **Claude Code / opencode**（不是派給角色！見 §4.2）。harness 可抽換（registry/factories）。 |
+| 動作模式 act / advise（per-role 預設 + 每回合覆寫） | ✅ | advise 時工具過濾成唯讀 `READONLY_TOOLS`。 |
+| L2 知識庫（INDEX 常駐 + search_knowledge / read_doc 隨選） | ✅ | files-as-truth，無向量庫；角色可綁 `knowledge[]`。 |
+| Skills（SKILL.md，`load_skill` 隨選，可 role-scoped） | ✅ | |
+| 費用/預算計量（ledger.jsonl + budgetGate 前置關卡 + cost:update/budget:alert + 前端即時累加） | ⚠️ | 管線完整，但 cost 是**本地價表估算**（`computeLlmCost`）。**價表沒列的 model（如 minimax）→ 算成 $0**，所以花費條不動。補 `billing.json` pricing 即可。 |
+| Channels：cli / discord / web（REST + WS） | ✅ | |
+| Web UI：常駐 sidebar（Sessions / Virtual company / Budget & spend / Settings）+ 設定頁 + DispatchCard + 每 session 動作模式開關 | ✅ | Next.js 靜態匯出。 |
+| 持久化：files-as-truth（`.sessions/`、`.memory/`、`.usage/`） | ✅ | per-session memory（見 §4.2）。 |
+| Production 部署（Zeabur，兩 repo） | ⚠️ | FS ephemeral，redeploy 會清掉 ledger/sessions/memory（未掛 volume）。詳 `HANDOFF.md §2.5`。 |
+
+### 4.2 尚未具備 / 常見誤會（❌ / 🔜）
+
+| 缺口 | 狀態 | 說明 |
+|---|---|---|
+| **角色間互相委派（role → role，如 PM 自動派給 RD）** | ❌ | **沒有此機制**。`dispatch_coding_task` 是派給 coding harness，不是派給角色。persona 裡「交棒給 X」只是文字敘述，不會真的觸發另一個角色。要模擬只能**人類手動當中繼**（先問 PM 拿 PRD，再自己貼給 Engineer）。 |
+| 多角色編排 / workflow node-graph designer | 🔜 deferred | sidebar 留了 `soon` 佔位。真正的角色接力靠這塊。 |
+| Projects | 🔜 deferred | sidebar `soon` 佔位。 |
+| Per-role 持久記憶 | ❌ | 記憶目前是 **per-session**（`.memory/{sessionKey}.md`），不是 per-role。角色長期知識走 skills / knowledge 檔。 |
+| Mobile 跟進 agent-os 新事件/端點 | ❌ | `mobile/` 尚未支援 dispatch:*/cost:*/budget:*、roleId、role/usage REST。 |
+| UI 管理 knowledge 檔案 / MCP server 連線 | ❌ | 設定頁只編 roles.json。 |
+
+## 5. 現在狀態 / 下一步
 
 - **下一步**：四個規劃任務（Task 1–4）皆完成並驗證。剩餘 deferred：workflow node-graph designer（sidebar 已留 `soon` 佔位）、projects、mobile 跟進 agent-os 新事件/端點。
+- **🚀 Production 已上線（Zeabur，2026-06-29）**：web https://yagent1.zeabur.app、backend https://api-yagent.zeabur.app，皆實機 200 驗證過。部署拓樸 / Zeabur API token（`./kk`）/ 重部署指令 / 地雷（web 靜態站 `zbpack.json`、main vs feature/memory branch）全在 **`HANDOFF.md` §2.5**。
 - **Task 4 產物**：`web/components/Sidebar.tsx`（殼+四區）、`BudgetPanel.tsx`（精簡花費，從 Dashboard 搬出）；移除 `Dashboard.tsx`；`store.ts` 的 `view` 去 `dashboard`、加 `welcome`，`showDashboard`→`showHome`；`page.tsx` 改成常駐 sidebar + 依 view 切主區。純前端、未動後端/協定，故 `mobile/` 無需跟進此項。
 - **本機 dev 注意**：前端 `web/.env.development` 預設指 `localhost:3001`，所以 **backend 要在 3001**；建議**先起 backend（`npm run dev:web`）再起 Next（`npm --prefix web run dev`）**，避免 Next 搶 3001。看終端機印的網址開頁。**別**直接看 backend serve 的 `web/dist`（那是用 `.env.production` build、指向 zeabur，本機抓不到資料）。
 - backend `:PORT` 被佔時會自動往上找（PaaS 注入 `PORT` 時則照平台指定不掃）。
