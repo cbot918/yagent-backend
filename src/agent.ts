@@ -3,6 +3,9 @@ import { complete } from './llm.js';
 import { loadSession, saveSession, withSessionLock } from './session.js';
 import { getMemoryContext } from './memory/memory.js';
 import { loadSkillSummaries } from './skills/loader.js';
+import { getRole, resolvePersona } from './roles/loader.js';
+import type { Role } from './roles/types.js';
+import { budgetGate, recordUsage, loadBilling, computeLlmCost } from './usage/index.js';
 import { config } from './config.js';
 import { bus } from './events.js';
 import type { ToolRegistry, ToolContext } from './tools/types.js';
@@ -12,15 +15,19 @@ const MAX_ITERATIONS = 20;
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
 
-async function buildSystemPrompt(sessionKey: string): Promise<string> {
+async function buildSystemPrompt(sessionKey: string, role: Role): Promise<string> {
   const memory = await getMemoryContext(sessionKey);
   const skills = await loadSkillSummaries();
   const skillList =
     skills.length > 0
       ? skills.map((s) => `- **${s.name}** (dir: \`${s.dir}\`): ${s.description}`).join('\n')
       : 'No skills installed.';
+  const persona = await resolvePersona(role);
+  const harness = role.codingAgent ?? config.codingAgent;
 
-  return `You are yagent — a mini AI agent (an OpenClaw demo for COSCUP 2026).
+  return `${persona}
+
+You are "${role.name}"${role.title ? ` — ${role.title}` : ''}, a member of an agent-os virtual company (an OpenClaw-style demo).
 
 ## Your Memory
 ${memory}
@@ -28,6 +35,9 @@ ${memory}
 ## Available Skills
 ${skillList}
 Call the \`load_skill\` tool to read a skill's full guidance before using it.
+
+## Delegating heavy coding
+For multi-file edits or building/running code, call \`dispatch_coding_task\` to delegate to an external coding agent (currently: ${harness}). Provide a precise, self-contained spec; you'll get back the diff/summary to review.
 
 ## Workspace
 ${config.workspaceDir}
@@ -37,10 +47,11 @@ Think step by step. Use tools to act, observe results, then continue or respond.
 }
 
 export function createAgent(registry: ToolRegistry, channel: Channel) {
-  async function handle(sessionKey: string, text: string) {
+  async function handle(sessionKey: string, text: string, roleId?: string) {
     await withSessionLock(sessionKey, async () => {
+      const role = await getRole(roleId);
       const history = (await loadSession(sessionKey)) as Message[];
-      const systemPrompt = await buildSystemPrompt(sessionKey);
+      const systemPrompt = await buildSystemPrompt(sessionKey, role);
 
       const messages: Message[] = [
         { role: 'system', content: systemPrompt },
@@ -48,20 +59,72 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
         { role: 'user', content: text },
       ];
 
-      const tools = registry.toOpenAIFormat();
-      const ctx: ToolContext = { sessionKey, workspaceDir: config.workspaceDir };
+      // A role may restrict which tools it can use (undefined/empty = all).
+      const allTools = registry.toOpenAIFormat();
+      const tools =
+        role.tools && role.tools.length
+          ? allTools.filter((t) => role.tools!.includes(t.function.name))
+          : allTools;
+      const model = role.model || config.model;
+      // Attribute orchestrator spend to a provider/key for budgeting.
+      const provider = config.openaiBaseUrl.includes('openrouter') ? 'openrouter' : 'openai';
+      const keyId = provider;
+      const { pricing } = await loadBilling();
+      const ctx: ToolContext = {
+        sessionKey,
+        workspaceDir: config.workspaceDir,
+        channel: channel.name,
+        roleId: role.id,
+        codingAgent: role.codingAgent,
+      };
       let iteration = 0;
       let finalText = '';
 
-      const meta = { sessionKey, channel: channel.name };
-      console.log(`\n[loop] session=${sessionKey}`);
+      const meta = { sessionKey, channel: channel.name, roleId: role.id };
+      console.log(`\n[loop] session=${sessionKey} role=${role.id}`);
       bus.emitEvent({ type: 'turn:start', text, ts: Date.now(), ...meta });
 
       try {
+        // Budget enforcement: if a governing cap is already exceeded, pause
+        // this role's turn before spending anything.
+        const blocked = await budgetGate({ provider, keyId, roleId: role.id });
+        if (blocked.length > 0) {
+          const b = blocked[0];
+          finalText = `[budget] Over the ${b.budget.scope}${b.budget.match ? ` "${b.budget.match}"` : ''} limit: $${b.usedUSD.toFixed(2)} / $${b.limitUSD.toFixed(2)} (last ${b.budget.periodDays}d). Pausing — raise the limit in billing.json to continue.`;
+          bus.emitEvent({
+            type: 'budget:alert',
+            budgetId: b.budget.id,
+            scope: b.budget.scope,
+            match: b.budget.match,
+            usedUSD: b.usedUSD,
+            limitUSD: b.limitUSD,
+            ts: Date.now(),
+            ...meta,
+          });
+        } else {
         while (iteration < MAX_ITERATIONS) {
-          const response = await complete(messages, tools);
+          const response = await complete(messages, tools, model);
           const msg = response.choices[0].message;
           messages.push(msg as Message);
+
+          // Meter the orchestrator LLM call.
+          if (response.usage) {
+            await recordUsage(
+              {
+                ts: Date.now(),
+                sessionKey,
+                roleId: role.id,
+                source: 'llm',
+                provider,
+                keyId,
+                model,
+                inputTokens: response.usage.prompt_tokens,
+                outputTokens: response.usage.completion_tokens,
+                costUSD: computeLlmCost(pricing, model, response.usage.prompt_tokens, response.usage.completion_tokens),
+              },
+              { channel: channel.name },
+            );
+          }
 
           const toolCalls = (msg.tool_calls ?? []).map((tc) => ({
             name: tc.function.name,
@@ -104,6 +167,7 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
 
         const historyToSave = messages.slice(1); // drop system prompt
         await saveSession(sessionKey, historyToSave);
+        }
       } catch (err) {
         // Never let a failed turn (bad API key, network, tool crash) take down the
         // gateway. Surface the error as the reply so the UI unsticks and shows why.

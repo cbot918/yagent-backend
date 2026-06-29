@@ -15,6 +15,19 @@ export const config = {
   // Set to the web UI's URL in prod; '*' is fine for local/demo.
   webOrigin: process.env.WEB_ORIGIN ?? '*',
 
+  // Coding-agent dispatch (the swappable sub-harness for heavy coding tasks).
+  // claude = Claude Code; opencode = opencode (point at OpenRouter via OPENCODE_MODEL).
+  codingAgent: (process.env.CODING_AGENT ?? 'claude') as 'claude' | 'opencode',
+  codingAgentTimeoutMs: Number(process.env.CODING_AGENT_TIMEOUT_MS ?? 600000),
+  claudeBin: process.env.CLAUDE_BIN ?? 'claude',
+  claudeModel: process.env.CLAUDE_MODEL ?? '', // '' = harness default
+  // Headless harness has no TTY to answer permission prompts; allow it to act.
+  // Self-use only. Set CLAUDE_YOLO=false to require a permissioned setup instead.
+  claudeYolo: process.env.CLAUDE_YOLO !== 'false',
+  opencodeBin: process.env.OPENCODE_BIN ?? 'opencode',
+  opencodeModel: process.env.OPENCODE_MODEL ?? 'openrouter/anthropic/claude-3.5-sonnet',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
+
   // Shell sandbox: host (dev only) | docker | e2b
   shellBackend: (process.env.SHELL_BACKEND ?? 'host') as 'host' | 'docker' | 'e2b',
   shellTimeoutMs: Number(process.env.SHELL_TIMEOUT_MS ?? 15000),

@@ -1,6 +1,12 @@
 export interface ToolContext {
   sessionKey: string;
   workspaceDir: string;
+  /** Originating channel name — so tools (e.g. dispatch) can emit bus events. */
+  channel: string;
+  /** Active virtual-company role id, when the turn is bound to a role. */
+  roleId?: string;
+  /** Default coding harness for this turn's role (dispatch_coding_task). */
+  codingAgent?: string;
 }
 
 export interface Tool {

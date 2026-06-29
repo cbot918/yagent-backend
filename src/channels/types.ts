@@ -1,6 +1,8 @@
 export interface IncomingMessage {
   sessionKey: string;
   text: string;
+  /** Which virtual-company role to answer as (manual switchboard). */
+  roleId?: string;
 }
 
 export type MessageHandler = (msg: IncomingMessage) => Promise<void>;

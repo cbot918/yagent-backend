@@ -1,0 +1,17 @@
+{
+  "keys": [
+    { "id": "openrouter", "provider": "openrouter", "label": "OpenRouter (orchestrator)", "env": "OPENROUTER_API_KEY" },
+    { "id": "openai", "provider": "openai", "label": "OpenAI", "env": "OPENAI_API_KEY" },
+    { "id": "claude", "provider": "claude-subscription", "label": "Claude (subscription)" }
+  ],
+  "budgets": [
+    { "id": "global", "scope": "global", "limitUSD": 50, "periodDays": 30 },
+    { "id": "claude-monthly", "scope": "key", "match": "claude", "limitUSD": 30, "periodDays": 30 }
+  ],
+  "pricing": {
+    "gpt-4o-mini": { "inUSDPerM": 0.15, "outUSDPerM": 0.6 },
+    "google/gemini-2.0-flash": { "inUSDPerM": 0.1, "outUSDPerM": 0.4 },
+    "google/gemini-flash-1.5": { "inUSDPerM": 0.075, "outUSDPerM": 0.3 },
+    "default": { "inUSDPerM": 0, "outUSDPerM": 0 }
+  }
+}

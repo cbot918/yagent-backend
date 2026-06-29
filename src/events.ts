@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import type { UsageEntry } from './usage/types.js';
 
 /**
  * Structured events emitted by the agent loop so observers (e.g. the web UI)
@@ -9,6 +10,8 @@ import { EventEmitter } from 'events';
 export interface BaseEvent {
   sessionKey: string;
   channel: string;
+  /** Active virtual-company role id for this turn, if any. */
+  roleId?: string;
   ts: number;
 }
 
@@ -22,7 +25,29 @@ export type AgentEvent =
     })
   | (BaseEvent & { type: 'tool:call'; iteration: number; name: string; args: Record<string, unknown> })
   | (BaseEvent & { type: 'tool:result'; iteration: number; name: string; result: string })
-  | (BaseEvent & { type: 'turn:end'; finalText: string; iterations: number });
+  | (BaseEvent & { type: 'turn:end'; finalText: string; iterations: number })
+  // Sub-harness (coding agent) dispatch — streamed so the UI can render a
+  // delegated coding task's progress live, separate from the orchestrator loop.
+  | (BaseEvent & { type: 'dispatch:start'; taskId: string; agent: string; task: string; cwd: string })
+  | (BaseEvent & { type: 'dispatch:event'; taskId: string; kind: string; text: string })
+  | (BaseEvent & {
+      type: 'dispatch:end';
+      taskId: string;
+      summary: string;
+      costUSD?: number;
+      isError: boolean;
+      exitCode: number;
+    })
+  // Cost/budget metering — so the dashboard updates spend live and warns on caps.
+  | (BaseEvent & { type: 'cost:update'; entry: UsageEntry })
+  | (BaseEvent & {
+      type: 'budget:alert';
+      budgetId: string;
+      scope: string;
+      match?: string;
+      usedUSD: number;
+      limitUSD: number;
+    });
 
 const EVENT = 'event';
 

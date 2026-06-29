@@ -7,6 +7,8 @@ import { config } from '../config.js';
 import { bus } from '../events.js';
 import { loadSession } from '../session.js';
 import { readMemory } from '../memory/memory.js';
+import { loadRoles } from '../roles/loader.js';
+import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
 import type { Channel, MessageHandler } from './types.js';
 
@@ -96,6 +98,23 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return true;
   }
 
+  if (pathname === '/api/roles') {
+    sendJson(res, 200, { roles: await loadRoles() });
+    return true;
+  }
+
+  if (pathname === '/api/usage') {
+    const entries = await readUsage();
+    const { keys, budgets } = await loadBilling();
+    sendJson(res, 200, {
+      summary: summarize(entries),
+      recent: entries.slice(-100).reverse(),
+      keys,
+      budgets: await evaluateBudgets(budgets),
+    });
+    return true;
+  }
+
   if (pathname === '/api/sessions') {
     sendJson(res, 200, { sessions: await listSessionKeys() });
     return true;
@@ -163,11 +182,16 @@ export function createWebChannel(): Channel {
     ws.on('close', () => clients.delete(ws));
     ws.on('message', (raw) => {
       try {
-        const msg = JSON.parse(raw.toString()) as { type?: string; sessionKey?: string; text?: string };
+        const msg = JSON.parse(raw.toString()) as {
+          type?: string;
+          sessionKey?: string;
+          text?: string;
+          roleId?: string;
+        };
         if (msg.type === 'send' && msg.sessionKey && msg.text && messageHandler) {
           // Catch so a failing turn can't become an unhandled rejection (which
           // would crash the whole process and drop every WebSocket).
-          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text }).catch((err) => {
+          void messageHandler({ sessionKey: msg.sessionKey, text: msg.text, roleId: msg.roleId }).catch((err) => {
             console.error('[web] handler error:', err);
           });
         }
