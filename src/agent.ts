@@ -72,67 +72,92 @@ ${
 Think step by step. Use tools to act, observe results, then continue or respond.`;
 }
 
-export function createAgent(registry: ToolRegistry, channel: Channel) {
-  async function handle(sessionKey: string, text: string, roleId?: string, actionMode?: 'act' | 'advise') {
-    await withSessionLock(sessionKey, async () => {
-      const role = await getRole(roleId);
-      // Effective mode: per-turn override (like plan/edit mode) wins over the
-      // role's default; default is 'act'.
-      const mode: 'act' | 'advise' = actionMode ?? role.actionMode ?? 'act';
-      const history = (await loadSession(sessionKey)) as Message[];
-      const systemPrompt = await buildSystemPrompt(sessionKey, role, mode);
+/** Max delegation nesting (a delegate may re-delegate, but not forever). */
+export const MAX_DELEGATION_DEPTH = 2;
 
-      const messages: Message[] = [
-        { role: 'system', content: systemPrompt },
-        ...history,
-        { role: 'user', content: text },
-      ];
+export interface RunTurnOptions {
+  sessionKey: string;
+  text: string;
+  roleId?: string;
+  actionMode?: 'act' | 'advise';
+  /** Delegation nesting depth (0 = top-level user turn). */
+  depth?: number;
+  /** Channel name for event/usage attribution. Defaults to 'agent'. */
+  channelName?: string;
+}
 
-      // A role may restrict which tools it can use (undefined/empty = all);
-      // advisory mode further restricts to read-only tools.
-      const allTools = registry.toOpenAIFormat();
-      let tools =
-        role.tools && role.tools.length
-          ? allTools.filter((t) => role.tools!.includes(t.function.name))
-          : allTools;
-      if (mode === 'advise') tools = tools.filter((t) => READONLY_TOOLS.has(t.function.name));
-      const model = role.model || config.model;
-      // Attribute orchestrator spend to a provider/key for budgeting.
-      const provider = config.openaiBaseUrl.includes('openrouter') ? 'openrouter' : 'openai';
-      const keyId = provider;
-      const { pricing } = await loadBilling();
-      const ctx: ToolContext = {
-        sessionKey,
-        workspaceDir: config.workspaceDir,
-        channel: channel.name,
-        roleId: role.id,
-        codingAgent: role.codingAgent,
-      };
-      let iteration = 0;
-      let finalText = '';
+/**
+ * Runs one full role-aware turn — build system prompt → ≤20-iteration
+ * tool-calling loop → persist history — and returns the final text. No channel
+ * side-effects (the caller decides what to do with the reply). Shared by:
+ *  - `handle` (the user-facing turn, which then calls channel.sendReply), and
+ *  - the `delegate_to_role` tool (a role handing a subtask to another role,
+ *    which just needs the returned text — see src/tools/delegateRole.ts).
+ */
+export async function runTurn(registry: ToolRegistry, opts: RunTurnOptions): Promise<string> {
+  const { sessionKey, text, roleId, actionMode, depth = 0 } = opts;
+  const channelName = opts.channelName ?? 'agent';
+  let finalText = '';
 
-      const meta = { sessionKey, channel: channel.name, roleId: role.id };
-      console.log(`\n[loop] session=${sessionKey} role=${role.id}`);
-      bus.emitEvent({ type: 'turn:start', text, ts: Date.now(), ...meta });
+  await withSessionLock(sessionKey, async () => {
+    const role = await getRole(roleId);
+    // Effective mode: per-turn override (like plan/edit mode) wins over the
+    // role's default; default is 'act'.
+    const mode: 'act' | 'advise' = actionMode ?? role.actionMode ?? 'act';
+    const history = (await loadSession(sessionKey)) as Message[];
+    const systemPrompt = await buildSystemPrompt(sessionKey, role, mode);
 
-      try {
-        // Budget enforcement: if a governing cap is already exceeded, pause
-        // this role's turn before spending anything.
-        const blocked = await budgetGate({ provider, keyId, roleId: role.id });
-        if (blocked.length > 0) {
-          const b = blocked[0];
-          finalText = `[budget] Over the ${b.budget.scope}${b.budget.match ? ` "${b.budget.match}"` : ''} limit: $${b.usedUSD.toFixed(2)} / $${b.limitUSD.toFixed(2)} (last ${b.budget.periodDays}d). Pausing — raise the limit in billing.json to continue.`;
-          bus.emitEvent({
-            type: 'budget:alert',
-            budgetId: b.budget.id,
-            scope: b.budget.scope,
-            match: b.budget.match,
-            usedUSD: b.usedUSD,
-            limitUSD: b.limitUSD,
-            ts: Date.now(),
-            ...meta,
-          });
-        } else {
+    const messages: Message[] = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: text },
+    ];
+
+    // A role may restrict which tools it can use (undefined/empty = all);
+    // advisory mode further restricts to read-only tools.
+    const allTools = registry.toOpenAIFormat();
+    let tools =
+      role.tools && role.tools.length
+        ? allTools.filter((t) => role.tools!.includes(t.function.name))
+        : allTools;
+    if (mode === 'advise') tools = tools.filter((t) => READONLY_TOOLS.has(t.function.name));
+    const model = role.model || config.model;
+    // Attribute orchestrator spend to a provider/key for budgeting.
+    const provider = config.openaiBaseUrl.includes('openrouter') ? 'openrouter' : 'openai';
+    const keyId = provider;
+    const { pricing } = await loadBilling();
+    const ctx: ToolContext = {
+      sessionKey,
+      workspaceDir: config.workspaceDir,
+      channel: channelName,
+      roleId: role.id,
+      codingAgent: role.codingAgent,
+      delegationDepth: depth,
+    };
+    let iteration = 0;
+
+    const meta = { sessionKey, channel: channelName, roleId: role.id };
+    console.log(`\n[loop] session=${sessionKey} role=${role.id}${depth ? ` depth=${depth}` : ''}`);
+    bus.emitEvent({ type: 'turn:start', text, ts: Date.now(), ...meta });
+
+    try {
+      // Budget enforcement: if a governing cap is already exceeded, pause
+      // this role's turn before spending anything.
+      const blocked = await budgetGate({ provider, keyId, roleId: role.id });
+      if (blocked.length > 0) {
+        const b = blocked[0];
+        finalText = `[budget] Over the ${b.budget.scope}${b.budget.match ? ` "${b.budget.match}"` : ''} limit: $${b.usedUSD.toFixed(2)} / $${b.limitUSD.toFixed(2)} (last ${b.budget.periodDays}d). Pausing — raise the limit in billing.json to continue.`;
+        bus.emitEvent({
+          type: 'budget:alert',
+          budgetId: b.budget.id,
+          scope: b.budget.scope,
+          match: b.budget.match,
+          usedUSD: b.usedUSD,
+          limitUSD: b.limitUSD,
+          ts: Date.now(),
+          ...meta,
+        });
+      } else {
         while (iteration < MAX_ITERATIONS) {
           const response = await complete(messages, tools, model);
           const msg = response.choices[0].message;
@@ -153,7 +178,7 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
                 outputTokens: response.usage.completion_tokens,
                 costUSD: computeLlmCost(pricing, model, response.usage.prompt_tokens, response.usage.completion_tokens),
               },
-              { channel: channel.name },
+              { channel: channelName },
             );
           }
 
@@ -198,17 +223,24 @@ export function createAgent(registry: ToolRegistry, channel: Channel) {
 
         const historyToSave = messages.slice(1); // drop system prompt
         await saveSession(sessionKey, historyToSave);
-        }
-      } catch (err) {
-        // Never let a failed turn (bad API key, network, tool crash) take down the
-        // gateway. Surface the error as the reply so the UI unsticks and shows why.
-        finalText = `[agent error] ${err instanceof Error ? err.message : String(err)}`;
-        console.error('[loop] error:', err);
       }
+    } catch (err) {
+      // Never let a failed turn (bad API key, network, tool crash) take down the
+      // gateway. Surface the error as the reply so the UI unsticks and shows why.
+      finalText = `[agent error] ${err instanceof Error ? err.message : String(err)}`;
+      console.error('[loop] error:', err);
+    }
 
-      bus.emitEvent({ type: 'turn:end', finalText, iterations: iteration + 1, ts: Date.now(), ...meta });
-      await channel.sendReply(sessionKey, finalText);
-    });
+    bus.emitEvent({ type: 'turn:end', finalText, iterations: iteration + 1, ts: Date.now(), ...meta });
+  });
+
+  return finalText;
+}
+
+export function createAgent(registry: ToolRegistry, channel: Channel) {
+  async function handle(sessionKey: string, text: string, roleId?: string, actionMode?: 'act' | 'advise') {
+    const finalText = await runTurn(registry, { sessionKey, text, roleId, actionMode, channelName: channel.name });
+    await channel.sendReply(sessionKey, finalText);
   }
 
   return { handle };

@@ -7,6 +7,8 @@ export interface ToolContext {
   roleId?: string;
   /** Default coding harness for this turn's role (dispatch_coding_task). */
   codingAgent?: string;
+  /** Delegation nesting depth (0 = top-level user turn). Guards delegate_to_role recursion. */
+  delegationDepth?: number;
 }
 
 export interface Tool {

@@ -10,6 +10,7 @@ import { saveMemoryTool } from './memory/memory.js';
 import { loadSkillTool } from './skills/loader.js';
 import { searchKnowledgeTool, readDocTool } from './tools/knowledge.js';
 import { dispatchCodingTool } from './tools/dispatchCoding.js';
+import { createDelegateRoleTool } from './tools/delegateRole.js';
 import { cliChannel } from './channels/cli.js';
 import { createDiscordChannel } from './channels/discord.js';
 import { createWebChannel } from './channels/web.js';
@@ -30,6 +31,7 @@ async function main() {
   registry.register(searchKnowledgeTool);
   registry.register(readDocTool);
   registry.register(dispatchCodingTool);
+  registry.register(createDelegateRoleTool(registry));
   if (config.allowShell) registry.register(shellTool);
   if (config.allowBrowser) registry.register(browseTool);
 

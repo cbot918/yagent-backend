@@ -38,6 +38,13 @@ export type AgentEvent =
       isError: boolean;
       exitCode: number;
     })
+  // Inter-role delegation — one role hands a subtask to another member; the
+  // delegate runs its own turn (separate sessionKey) and the result returns to
+  // the caller. Bracketed by these so the caller's UI can render a sub-panel.
+  // `roleId` (BaseEvent) is the *delegating* role; `toRoleId` is the delegate.
+  | (BaseEvent & { type: 'delegate:start'; taskId: string; toRoleId: string; toRoleName: string; task: string })
+  | (BaseEvent & { type: 'delegate:event'; taskId: string; kind: string; text: string })
+  | (BaseEvent & { type: 'delegate:end'; taskId: string; toRoleId: string; result: string; isError: boolean })
   // Cost/budget metering — so the dashboard updates spend live and warns on caps.
   | (BaseEvent & { type: 'cost:update'; entry: UsageEntry })
   | (BaseEvent & {
