@@ -1,9 +1,58 @@
 # agent-os — Session Handoff
 
 > ⚡ **快速掌握請先讀 `ARCHITECTURE.md`**（架構速覽 + **任務狀態總列表** + 現在狀態，由 `skills/agentos-arch` 維護）。本檔是詳細交接背景與 Task 3/4 規格。
-> 撰寫於 2026-06-29；最後更新 2026-06-29（Task 4 完成 + 首次上線 Zeabur，見 §2.5）。給「換 session 後接手」用的無上下文交接文件。
+> 撰寫於 2026-06-29；最後更新 **2026-07-05**（新增 §0.0 換機接手 checklist；delegate 已完成在 `feature/delegate`）。給「換 session／換機器後接手」用的無上下文交接文件。
 > 先讀 `CLAUDE.md` 的 **「agent-os layer」** 章節（最權威的現況說明），再讀這份。
 > 另有自動記憶在 `~/.claude/projects/-Users-yale-Documents-coding-ElementAI-openclaw-proj-yagent/memory/`（`agent-os-direction.md`、`claude-code-billing-caution.md`）。
+
+---
+
+## 0.0 換機接手 checklist（新機器上把專案跑起來）— 2026-07-05
+
+> 目的：clone 到**另一台電腦**後，把 dev 環境完整重現。**最大陷阱：secret 檔沒進 git**（見下），clone 完不會有，一定要另外帶。
+
+### A. git 現況（接手前先對齊）
+- **開發分支＝`feature/delegate`**（比 `main` 領先 1 個 commit `645a105`，**尚未併回 main**）。`feature/memory` 已與 `main` 同步（無獨有 commit）。working tree 乾淨。
+- production 從 **`main`** 部署（不是 `feature/*`）。要上線：`git checkout main && git merge --ff-only feature/delegate && git push origin main`，再 `redeployService`（見 §2.5）。
+- `web/` 是 **embedded git repo（gitlink）**，自己的 remote/branch（`cbot918/yagent-web` `master`）。改 web 要在 `web/` 內另外 commit+push，再回根 `git add web` 更新 gitlink。
+
+### B. ⚠️ 不進 git、必須「另外帶過去」的 secret 檔（.gitignore 擋掉）
+clone 後這些檔**不存在**，需用非 git 管道（AirDrop / 1Password / scp / 隨身碟）從舊機複製，或重新從來源取得：
+| 檔案 | 內容 | 怎麼補 |
+|---|---|---|
+| `.env`（repo 根） | `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `OPENAI_MODEL` / `DISCORD_TOKEN` 等真值 | 從舊機複製，或照 `.env.example` 重填真 key |
+| `kk`（repo 根） | Zeabur API token，格式 `zeabur: sk-...`（**冒號後**才是 token） | 從舊機複製，或到 Zeabur dashboard 重新產 token |
+| `workspace/`（gitignored） | `.sessions/` `.memory/` `.usage/ledger.jsonl` 執行期狀態 | **不必帶**（重跑會重建）；要保留歷史/帳本才複製 |
+
+> `web/.env.development`、`web/.env.production`、`.env.example`、`web/.env.example` **有進 git**（非 secret，只是後端 URL），會隨 clone 帶過來，不用管。
+
+### C. 新機安裝步驟
+```bash
+# 1. runtime：Node >= 20（本機用 v22）。
+node -v
+# 2. 依賴：root 與 web/ 各自一份 package.json，兩個都要裝。
+npm install
+npm --prefix web install
+# 3. 把 .env 和 kk 放回 repo 根（見 B）。
+# 4. 冒煙測試（最快的 dev loop，不碰 Discord/token）：
+npm run dev:cli
+# 5. 自動檢查（唯一的 CI 等價物；沒有 test/lint runner）：
+npm run build              # 後端 tsc（strict）
+npm --prefix web run build # Next 型別檢查 + static export
+```
+
+### D. 外部 CLI / 選用依賴（依你要用的功能才需要）
+| 依賴 | 何時需要 | 備註 |
+|---|---|---|
+| `claude` CLI | `CODING_AGENT=claude`（`dispatch_coding_task` 派給 Claude Code） | 本機為 v2.1.197。**計費：`ANTHROPIC_API_KEY` 沒設才吃訂閱**，設了就走 metered API（見自動記憶 `claude-code-billing-caution.md`）。 |
+| `opencode` CLI | `CODING_AGENT=opencode` | 本機**未裝**；要用得 `npm i -g opencode` 之類並設 `OPENCODE_MODEL`+`OPENROUTER_API_KEY`。 |
+| `npx playwright install chromium` | `ALLOW_BROWSER=true`（browse 工具） | 一次性。 |
+| Docker / e2b | `SHELL_BACKEND=docker` 或 `e2b`（沙箱 shell） | 本機**無 Docker**；沒 Docker 就用 `SHELL_BACKEND=e2b`（需 `E2B_API_KEY`）或 `host`（無沙箱，僅 dev）。選 docker 但沒 Docker 會**大聲報錯不會偷偷 fallback**。 |
+
+### E. 接手後第一步
+1. 讀 `ARCHITECTURE.md`（架構+任務單一事實來源）→ `CLAUDE.md` 的「agent-os layer」→ 本檔。
+2. 用 `yerp-architect` skill 快速拉齊專案心智模型（`load_skill yerp-architect`）。
+3. `npm run dev:cli` 確認能跑，再 `npm run build` 確認綠燈，才開始改。
 
 ---
 
