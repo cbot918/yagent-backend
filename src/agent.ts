@@ -4,7 +4,7 @@ import { loadSession, saveSession, withSessionLock } from './session.js';
 import { getMemoryContext } from './memory/memory.js';
 import { loadSkillSummaries } from './skills/loader.js';
 import { readIndex } from './knowledge/loader.js';
-import { getRole, resolvePersona } from './roles/loader.js';
+import { getRole, loadRoles, resolvePersona } from './roles/loader.js';
 import type { Role } from './roles/types.js';
 import { budgetGate, recordUsage, loadBilling, computeLlmCost } from './usage/index.js';
 import { config } from './config.js';
@@ -49,6 +49,14 @@ async function buildSystemPrompt(sessionKey: string, role: Role, mode: 'act' | '
       ? role.knowledge.map((d) => `- \`${d}\``).join('\n')
       : '';
 
+  // Company roster: every member except this role (self-delegation is barred).
+  // Without this the model has no way to know its colleagues' role ids, so it
+  // can never use delegate_to_role (the ids aren't guessable).
+  const colleagues = (await loadRoles()).filter((r) => r.id !== role.id);
+  const rosterList = colleagues
+    .map((r) => `- \`${r.id}\` — ${r.emoji ?? '🤖'} ${r.name}${r.title ? `（${r.title}）` : ''}: ${r.description}`)
+    .join('\n');
+
   const persona = await resolvePersona(role);
   const harness = role.codingAgent ?? config.codingAgent;
 
@@ -66,6 +74,11 @@ Call the \`load_skill\` tool to read a skill's full guidance before using it.
 ## Knowledge base
 The company knowledge base lives under \`knowledge/\`. Use \`search_knowledge\` to find relevant docs and \`read_doc\` to read one in full. Ground answers in these docs rather than guessing about ElementAI.
 ${roleDocs ? `\nYour reference docs (read them when relevant):\n${roleDocs}\n` : ''}${index ? `\nKnowledge map (INDEX):\n${index}` : ''}
+
+## Virtual company roster（你的同事）
+${rosterList || '(no other members)'}
+
+要把子任務交給別的成員、或使用者要你「找某人討論/請某人處理」時，呼叫 \`delegate_to_role\`（\`role\` 參數用上面的 id）。對方**看不到這段對話**，\`task\`/\`context\` 必須自包含（把必要的背景、限制、要交付什麼寫清楚）。對方會以自己的 persona/工具/權限跑完並回覆你；把結果整合進你的回答。
 
 ## Delegating heavy coding
 For multi-file edits or building/running code, call \`dispatch_coding_task\` to delegate to an external coding agent (currently: ${harness}). Provide a precise, self-contained spec; you'll get back the diff/summary to review.

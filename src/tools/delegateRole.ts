@@ -31,7 +31,11 @@ export function createDelegateRoleTool(registry: ToolRegistry): Tool {
     parameters: {
       type: 'object',
       properties: {
-        role: { type: 'string', description: 'Target role id, e.g. "engineer", "sa", "cfo", "marketing".' },
+        role: {
+          type: 'string',
+          description:
+            'Target role id — pick from the "Virtual company roster" in your system prompt (use the id, not the display name).',
+        },
         task: { type: 'string', description: 'Precise, self-contained instruction for the delegate.' },
         context: {
           type: 'string',

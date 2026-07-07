@@ -15,7 +15,7 @@
 
 | 概念 | 檔案 | 重點 |
 |---|---|---|
-| Agent loop（核心） | `src/agent.ts` | role-aware：`runTurn(registry,opts)` 跑一回合並回傳 finalText（建 system prompt → ≤20 次 tool-calling → 存 history），`handle(...)` 是它 + `sendReply` 的薄包裝；`delegate_to_role` 也呼叫 `runTurn`。**動作模式**：`advise` 時工具過濾成唯讀（`READONLY_TOOLS`），`act` 用角色 tools 白名單。發 `bus` 事件、budgetGate/recordUsage。 |
+| Agent loop（核心） | `src/agent.ts` | role-aware：`runTurn(registry,opts)` 跑一回合並回傳 finalText（建 system prompt → ≤20 次 tool-calling → 存 history），`handle(...)` 是它 + `sendReply` 的薄包裝；`delegate_to_role` 也呼叫 `runTurn`。system prompt 每回合注入**公司 roster**（所有其他成員的 id/名稱/職稱，委派目標來源）。**動作模式**：`advise` 時工具過濾成唯讀（`READONLY_TOOLS`），`act` 用角色 tools 白名單。發 `bus` 事件、budgetGate/recordUsage。 |
 | LLM | `src/llm.ts` | OpenAI-only；`complete(messages, tools, model)`。`OPENAI_BASE_URL` 可指 OpenRouter。 |
 | Config | `src/config.ts` | 所有 env 集中於此（含 `portFromPaaS`）。 |
 | Tools | `src/tools/` | `Tool` 介面；`ToolRegistry.run` catch 例外回字串。readFile/writeFile（`resolveInWorkspace` path guard）/listFiles/knowledge/dispatchCoding/**delegateRole（角色間委派）**/shell(gated)/browse(gated)。 |
@@ -52,13 +52,13 @@
 
 | 能力 | 狀態 | 邊界 / 說明 |
 |---|---|---|
-| 虛擬公司 13 角色，**手動切換 switchboard** | ✅ | 由**使用者挑一個角色**對話。角色之間**彼此不可見、不能互相派工**（見 §4.2）。`roles/roles.json`。 |
+| 虛擬公司 13 角色，**手動切換 switchboard** | ✅ | 由**使用者挑一個角色**對話。角色**看得見彼此**（roster 注入 system prompt）並可**單次互相委派**（`delegate_to_role`，見下）。`roles/roles.json`。 |
 | 角色可設定：persona / model / codingAgent / tools 白名單 / skills / knowledge / actionMode | ✅ | persona 檔案授權；其餘可在設定頁編輯，`POST /api/roles/:id` 寫回 JSON。 |
 | Role-aware agent loop（≤20 輪 tool-calling、per-session lock、每回合重建 system prompt） | ✅ | `src/agent.ts`。 |
 | 工具：read_file / write_file / list_files / save_memory / load_skill / search_knowledge / read_doc / dispatch_coding_task | ✅ | path-guard 鎖在 workspace/knowledge。 |
 | 工具（gated）：shell / browse | ⚠️ | 需 `ALLOW_SHELL` / `ALLOW_BROWSER`；shell 有沙箱後端，browse 有 SSRF guard。 |
 | **委派寫程式 `dispatch_coding_task` → 外部 coding harness** | ✅ | 派給 **Claude Code / opencode**（不是派給角色）。harness 可抽換（registry/factories）。 |
-| **角色間委派 `delegate_to_role`（role → role）** | ✅ | 一個角色把子任務交給另一個成員跑一個完整 turn（delegate 用自己的 persona/model/工具/權限/動作模式），結果回傳給呼叫者的 loop。深度上限 2、禁自我委派、跑在子 session `<caller>::<role>`、花費記在 delegate 角色名下。`src/tools/delegateRole.ts` + `runTurn`（`agent.ts`）。 |
+| **角色間委派 `delegate_to_role`（role → role）** | ✅ | 一個角色把子任務交給另一個成員跑一個完整 turn（delegate 用自己的 persona/model/工具/權限/動作模式），結果回傳給呼叫者的 loop。深度上限 2、禁自我委派、跑在子 session `<caller>::<role>`、花費記在 delegate 角色名下。**roster 注入 system prompt**，角色才知道有哪些同事/role id 可委派（2026-07-08 修）。`src/tools/delegateRole.ts` + `runTurn`（`agent.ts`）。 |
 | 動作模式 act / advise（per-role 預設 + 每回合覆寫） | ✅ | advise 時工具過濾成唯讀 `READONLY_TOOLS`。 |
 | L2 知識庫（INDEX 常駐 + search_knowledge / read_doc 隨選） | ✅ | files-as-truth，無向量庫；角色可綁 `knowledge[]`。 |
 | Skills（SKILL.md，`load_skill` 隨選，可 role-scoped） | ✅ | |
