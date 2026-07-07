@@ -14,12 +14,16 @@ export interface Role {
   description: string;
   /** Inline persona / system prompt. */
   systemPrompt?: string;
+  /** OR a markdown file (path relative to project root) whose content is the persona. */
+  systemPromptFile?: string;
   /** OR a skill dir whose SKILL.md body is used as the persona. */
   skill?: string;
   /** Orchestrator model override (OpenAI/OpenRouter id). undefined = default. */
   model?: string;
   /** Coding harness this role dispatches to by default. undefined = default. */
   codingAgent?: 'claude' | 'opencode';
+  /** Threads data backend for threads_trend: 'ensembledata' (metered API) | 'browser' (free scrape). undefined = default. */
+  threadsSource?: 'ensembledata' | 'browser';
   /** Optional tool allowlist (names). undefined/empty = all tools. */
   tools?: string[];
   /**

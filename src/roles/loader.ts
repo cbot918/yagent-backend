@@ -37,7 +37,7 @@ export async function getRole(id?: string): Promise<Role> {
 
 /** Fields the settings UI is allowed to edit (persona/identity stays immutable here). */
 export type RolePatch = Partial<
-  Pick<Role, 'model' | 'codingAgent' | 'tools' | 'skills' | 'knowledge' | 'actionMode'>
+  Pick<Role, 'model' | 'codingAgent' | 'threadsSource' | 'tools' | 'skills' | 'knowledge' | 'actionMode'>
 >;
 
 /**
@@ -51,7 +51,7 @@ export async function saveRole(id: string, patch: RolePatch): Promise<Role> {
   const role = parsed.roles?.find((r) => r.id === id);
   if (!role) throw new Error(`Unknown role "${id}"`);
 
-  const allowed: (keyof RolePatch)[] = ['model', 'codingAgent', 'tools', 'skills', 'knowledge', 'actionMode'];
+  const allowed: (keyof RolePatch)[] = ['model', 'codingAgent', 'threadsSource', 'tools', 'skills', 'knowledge', 'actionMode'];
   const target = role as unknown as Record<string, unknown>;
   for (const key of allowed) {
     if (key in patch) {
@@ -65,9 +65,16 @@ export async function saveRole(id: string, patch: RolePatch): Promise<Role> {
   return role;
 }
 
-/** The role's persona text: inline systemPrompt, else referenced skill body. */
+/** The role's persona text: inline systemPrompt, else persona file, else referenced skill body. */
 export async function resolvePersona(role: Role): Promise<string> {
   if (role.systemPrompt) return role.systemPrompt;
+  if (role.systemPromptFile) {
+    try {
+      return await fs.readFile(path.resolve(role.systemPromptFile), 'utf8');
+    } catch {
+      // missing/unreadable persona file → fall through to remaining sources
+    }
+  }
   if (role.skill) return loadSkillBody(role.skill);
   return DEFAULT_ROLE.systemPrompt!;
 }

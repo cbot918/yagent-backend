@@ -1,4 +1,4 @@
-# yerp-architect
+# yagent-architect
 yagent / agent-os 的深度開發架構師：懂每個模組的職責、資料流、規約地雷與「要改 X 該動哪裡」的擴充食譜，開發時直接給精準落點。
 
 ## 何時用

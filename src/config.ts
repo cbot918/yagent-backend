@@ -45,6 +45,16 @@ export const config = {
   browserHeadless: process.env.BROWSER_HEADLESS !== 'false',
   browserTimeoutMs: Number(process.env.BROWSER_TIMEOUT_MS ?? 30000),
 
+  // Threads trend scraping via EnsembleData's unofficial API (free tier: 50 units/day).
+  // Get a token at https://ensembledata.com (top-left of the dashboard). Tool self-disables when unset.
+  ensembledataToken: process.env.ENSEMBLEDATA_TOKEN ?? '',
+  ensembledataBaseUrl: process.env.ENSEMBLEDATA_BASE_URL ?? 'https://ensembledata.com/apis',
+  // Default Threads data backend: 'ensembledata' (metered API) | 'browser' (free headless scrape).
+  // A role can override this; on quota exhaustion we auto-fall back to browser when THREADS_FALLBACK
+  // is on and ALLOW_BROWSER=true.
+  threadsSource: process.env.THREADS_SOURCE ?? 'ensembledata',
+  threadsFallback: process.env.THREADS_FALLBACK !== 'false',
+
   // Voice transcription (separate from the chat LLM — OPENAI_BASE_URL/OpenRouter
   // does not serve /audio/transcriptions). Powers the web UI mic fallback.
   voiceApiUrl: process.env.VOICE_API_URL ?? 'https://api.openai.com/v1',

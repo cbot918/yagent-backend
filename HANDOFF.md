@@ -51,7 +51,7 @@ npm --prefix web run build # Next 型別檢查 + static export
 
 ### E. 接手後第一步
 1. 讀 `ARCHITECTURE.md`（架構+任務單一事實來源）→ `CLAUDE.md` 的「agent-os layer」→ 本檔。
-2. 用 `yerp-architect` skill 快速拉齊專案心智模型（`load_skill yerp-architect`）。
+2. 用 `yagent-architect` skill 快速拉齊專案心智模型（`load_skill yagent-architect`）。
 3. `npm run dev:cli` 確認能跑，再 `npm run build` 確認綠燈，才開始改。
 
 ---

@@ -10,7 +10,9 @@ import { readMemory } from '../memory/memory.js';
 import { loadRoles, saveRole } from '../roles/loader.js';
 import type { RolePatch } from '../roles/loader.js';
 import { listCodingAgents } from '../coding-agent/index.js';
+import { listThreadsSources } from '../threads/index.js';
 import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
+import { readThreadsLog, countToday } from '../monitor/threadsLog.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
 import type { Channel, MessageHandler } from './types.js';
 import type { ToolRegistry } from '../tools/types.js';
@@ -151,6 +153,12 @@ async function handleApi(
     return true;
   }
 
+  // Available Threads data sources (for the role settings toggle).
+  if (pathname === '/api/threads-sources') {
+    sendJson(res, 200, { sources: listThreadsSources() });
+    return true;
+  }
+
   // Persist a role config edit: POST /api/roles/:id  { model?, codingAgent?, tools?, skills?, knowledge?, actionMode? }
   const roleMatch = pathname.match(/^\/api\/roles\/([^/]+)$/);
   if (roleMatch && req.method === 'POST') {
@@ -175,6 +183,12 @@ async function handleApi(
       keys,
       budgets: await evaluateBudgets(budgets),
     });
+    return true;
+  }
+
+  // Monitor: the threads_trend call log (files-as-truth in .monitor/threads.jsonl).
+  if (pathname === '/api/monitor/threads') {
+    sendJson(res, 200, { entries: await readThreadsLog(200), todayCount: await countToday() });
     return true;
   }
 

@@ -17,7 +17,16 @@ const MAX_ITERATIONS = 20;
 // In 'advise' (advisory-only) mode a role may use only these non-mutating tools.
 // Everything else (write_file/shell/browse/dispatch_coding_task/save_memory/…)
 // is withheld so the role can read + recommend but not act.
-const READONLY_TOOLS = new Set(['read_file', 'list_files', 'search_knowledge', 'read_doc', 'load_skill']);
+// threads_trend is read-only research (fetches public data, mutates nothing), so it stays
+// available in advise mode — though it does spend a metered daily quota.
+const READONLY_TOOLS = new Set([
+  'read_file',
+  'list_files',
+  'search_knowledge',
+  'read_doc',
+  'load_skill',
+  'threads_trend',
+]);
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
 
@@ -132,6 +141,7 @@ export async function runTurn(registry: ToolRegistry, opts: RunTurnOptions): Pro
       channel: channelName,
       roleId: role.id,
       codingAgent: role.codingAgent,
+      threadsSource: role.threadsSource,
       delegationDepth: depth,
     };
     let iteration = 0;

@@ -11,6 +11,7 @@ import { loadSkillTool } from './skills/loader.js';
 import { searchKnowledgeTool, readDocTool } from './tools/knowledge.js';
 import { dispatchCodingTool } from './tools/dispatchCoding.js';
 import { createDelegateRoleTool } from './tools/delegateRole.js';
+import { threadsTrendTool } from './tools/threadsTrend.js';
 import { cliChannel } from './channels/cli.js';
 import { createDiscordChannel } from './channels/discord.js';
 import { createWebChannel } from './channels/web.js';
@@ -34,6 +35,8 @@ async function main() {
   registry.register(createDelegateRoleTool(registry));
   if (config.allowShell) registry.register(shellTool);
   if (config.allowBrowser) registry.register(browseTool);
+  // Register threads_trend if any source is available: the metered API (token) or the free browser scrape.
+  if (config.ensembledataToken || config.allowBrowser) registry.register(threadsTrendTool);
 
   // --- Channels ---
   const useWeb = config.enableWeb || process.argv.includes('--web');
