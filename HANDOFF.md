@@ -153,6 +153,14 @@ npm --prefix web run build # Next 型別檢查 + static export
 > 驗證：`npm --prefix web run build` 綠燈；preview E2E（桌機四區渲染/可收合、角色 row 開聊、齒輪進角色設定、budget 展開 keys、手機 ☰ drawer 完整 sidebar）皆過，console 無 error。
 > **純前端、未動後端/協定** → 此項不需同步 `mobile/`（但先前 Task 2/3 的新事件/端點 mobile 仍未跟進）。
 
+### Task 6 — Room channels 多角色會議室（**✅ 完成並驗證，2026-07-08，feature/room-channels**）
+
+拖角色進 channel、丟主題 → **moderator 選角**（一次小 LLM 呼叫挑 1–3 位相關成員，點名生效）→ 每位以完整 `runTurn` 依序發言（自己的 persona/工具/預算，子 session `room:<id>::<roleId>`，吃標註發言者的 transcript 增量）。
+- 後端：`src/rooms/`（types/store/orchestrator，房間存 `.rooms/<id>.json`）、`room:message`/`room:round:*` 事件、`/api/rooms*` REST、`index.ts` 依 `room:` sessionKey 前綴路由到 `runRoomMessage`。WS `send` 協定不變。
+- 前端：`RoomChannelsView.tsx`（角色 bench 拖進 channel / 點擊 fallback / chip ✕ 或拖回 bench 移除、發言 bubbles、「發言中」指示）；sidebar 加 Room channels 區並**預設全收合只留 Virtual company**。
+- v1 邊界：固定一間 `main`（會議室）、用戶驅動輪次（無自動辯論）、無總結/匯出、mobile 未跟進。
+> 驗證：兩邊 build 綠燈；真 LLM E2E — 丟 linebot 案主題 moderator 挑 pm+engineer 各自查知識庫後表態；UI 全鏈路 — 點名 CFO 只有 CFO 回、還引用 Engineer 的評估報價 NT$40k 並 @Sales；拖拉/點擊加退成員、round 指示、console 無 error。
+
 ---
 
 ## 2.5 部署現況 / Production（Zeabur）— 2026-06-29 首次上線

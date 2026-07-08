@@ -13,6 +13,7 @@ import { listCodingAgents } from '../coding-agent/index.js';
 import { listThreadsSources } from '../threads/index.js';
 import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
 import { readThreadsLog, countToday } from '../monitor/threadsLog.js';
+import { listRooms, loadRoom, addParticipant, removeParticipant } from '../rooms/store.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
 import type { Channel, MessageHandler } from './types.js';
 import type { ToolRegistry } from '../tools/types.js';
@@ -184,6 +185,34 @@ async function handleApi(
       budgets: await evaluateBudgets(budgets),
     });
     return true;
+  }
+
+  // Room channels: list rooms / read one room (with transcript) / edit participants.
+  if (pathname === '/api/rooms' && req.method === 'GET') {
+    sendJson(res, 200, { rooms: await listRooms() });
+    return true;
+  }
+  const roomMatch = pathname.match(/^\/api\/rooms\/([^/]+)(\/participants)?$/);
+  if (roomMatch) {
+    const roomId = decodeURIComponent(roomMatch[1]);
+    if (roomMatch[2] && req.method === 'POST') {
+      try {
+        const body = (await readBody(req)).toString('utf8');
+        const { add, remove } = (body ? JSON.parse(body) : {}) as { add?: string; remove?: string };
+        let room = add ? await addParticipant(roomId, add) : null;
+        if (remove) room = await removeParticipant(roomId, remove);
+        sendJson(res, 200, { room: room ?? (await loadRoom(roomId)) });
+      } catch (err) {
+        sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+      }
+      return true;
+    }
+    if (req.method === 'GET') {
+      const room = await loadRoom(roomId);
+      if (room) sendJson(res, 200, { room });
+      else sendJson(res, 404, { error: `unknown room "${roomId}"` });
+      return true;
+    }
   }
 
   // Monitor: the threads_trend call log (files-as-truth in .monitor/threads.jsonl).

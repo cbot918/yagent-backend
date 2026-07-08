@@ -17,6 +17,8 @@ import { createDiscordChannel } from './channels/discord.js';
 import { createWebChannel } from './channels/web.js';
 import { loadPlugins } from './plugins/loader.js';
 import { createAgent } from './agent.js';
+import { ensureDefaultRoom } from './rooms/store.js';
+import { runRoomMessage } from './rooms/orchestrator.js';
 import type { Channel } from './channels/types.js';
 
 async function main() {
@@ -55,10 +57,20 @@ async function main() {
     registerChannel: (ch) => channels.push(ch),
   });
 
+  // --- Rooms (multi-role meeting channels) ---
+  await ensureDefaultRoom();
+
   // --- Start all channels ---
   for (const ch of channels) {
     const agent = createAgent(registry, ch);
-    await ch.start((msg) => agent.handle(msg.sessionKey, msg.text, msg.roleId, msg.actionMode));
+    await ch.start((msg) => {
+      // Messages addressed to a room (`room:<id>`) go to the meeting
+      // orchestrator (moderator picks speakers → each runs its own turn)
+      // instead of the single-role agent loop.
+      const roomMatch = msg.sessionKey.match(/^room:([^:]+)$/);
+      if (roomMatch) return runRoomMessage(registry, roomMatch[1], msg.text);
+      return agent.handle(msg.sessionKey, msg.text, msg.roleId, msg.actionMode);
+    });
     console.log(`[gateway] channel started: ${ch.name}`);
   }
 }

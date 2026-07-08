@@ -2,7 +2,7 @@
 
 > **開新 session 的單一入口**：先讀這份，掌握「這是什麼 + 架構速覽 + 任務總列表 + 現在狀態」。
 > 深度參考：`CLAUDE.md`（架構權威）、`HANDOFF.md`（詳細交接背景與 Task 3/4 規格）、`knowledge/INDEX.md`（公司/產品知識）。
-> **維護者**：`skills/agentos-arch`。完成/變更任務或動到架構時，回來更新本檔（§2 架構、§3 任務、§4 功能清單、§5 狀態）。最後更新：2026-06-30（新增 §4 功能清單；新增角色間委派 `delegate_to_role`，feature/delegate 分支）。
+> **維護者**：`skills/agentos-arch`。完成/變更任務或動到架構時，回來更新本檔（§2 架構、§3 任務、§4 功能清單、§5 狀態）。最後更新：2026-07-08（roster 注入修委派可見性；新增 Room channels 多角色會議室，feature/room-channels 分支）。
 
 ---
 
@@ -22,6 +22,7 @@
 | Knowledge（L2） | `src/knowledge/loader.ts` + `src/tools/knowledge.ts` | files-as-truth 文件庫，`search_knowledge`/`read_doc` 鎖在 `knowledge/`（`resolveInKnowledge`）。INDEX 常駐注入。 |
 | Skills | `src/skills/loader.ts` + `skills/<dir>/SKILL.md` | line1=name、line2=desc、body 按需 `load_skill`。角色可用 `role.skills` 限定。 |
 | Roles | `src/roles/` + `roles/roles.json` | 角色＝persona + model + codingAgent + tools[] + skills[] + knowledge[] + actionMode。13 角色。`saveRole(id,patch)` 寫回 JSON（給設定頁）。新增＝改 JSON。 |
+| Room channels（多角色會議室） | `src/rooms/` + `WORKSPACE_DIR/.rooms/` | 房間＝participants+transcript（files-as-truth，seed 房 `main`）。`room:<id>` 訊息在 `index.ts` 路由到 `runRoomMessage`：moderator 一次小呼叫挑 1–3 位相關成員（點名生效）→ 每位用自己的 persona/工具/預算跑完整 `runTurn`（子 session `room:<id>::<roleId>`，吃標註發言者的記錄增量）。事件 `room:message`/`room:round:*`；REST `/api/rooms*`。 |
 | Coding harness 註冊 | `src/coding-agent/index.ts` | `factories` registry（可抽換接口）：`getCodingAgent()` + `listCodingAgents()`。加新 harness＝加一個 factory。 |
 | REST API | `src/channels/web.ts` | 讀：`/api/roles`、`/api/usage`、`/api/sessions*`、`/api/tools`、`/api/agents`。寫：`POST /api/roles/:id`（存角色設定）。+ `/ws`、`/api/transcribe`。 |
 | Usage/Budget | `src/usage/` + `billing.json` | `.usage/ledger.jsonl` 記帳；`budgetGate` 擋超額；`recordUsage` 發 `cost:update`/`budget:alert`。 |
@@ -43,6 +44,7 @@
 | 3 | 權限/委派 | ✅ 完成並驗證 | 設定頁（每角色 tools 白名單 + model + harness）寫回 roles.json（`POST /api/roles/:id`）；harness registry 可擴充（`/api/agents`）；**動作模式** act/advise＝per-role 預設 + 聊天即時切換，advise 過濾成唯讀工具。E2E 過。 |
 | 4 | Sidebar 重構 | ✅ 完成並驗證 | 常駐左側 sidebar（`Sidebar.tsx`）分四區：Sessions / Virtual company（角色+workflow+projects 佔位）/ Budget & spend（`BudgetPanel.tsx` 精簡+可展開）/ Settings。移除獨立 Dashboard 全頁，主區改 `welcome`/`session`/`settings`。桌機 static 欄、手機 `Sheet` drawer。build 綠燈 + preview E2E 過。 |
 | 5 | 角色間委派 `delegate_to_role` | ✅ 完成並驗證 | `runTurn` 抽出共用 + `delegate_to_role` 工具（深度上限 2、禁自我委派、子 session、花費記在 delegate 名下）；新 `delegate:*` 事件 + 前端 `DelegateCard` 鏡像。**真 LLM E2E 過**（PM→CFO + 三道 guard）。**feature/delegate 分支**，未併 main。 |
+| 6 | Room channels（多角色會議室） | ✅ 完成並驗證 | sidebar 預設全收合（只留 Virtual company）+ Room channels 入口；`RoomChannelsView` 拖拉角色進/出 channel；moderator 選角 + 逐位 runTurn；真 LLM E2E 過（點名 CFO 只有 CFO 回、引用他人發言報價）。**feature/room-channels 分支**。 |
 
 ## 4. 功能清單 / 能力與邊界（Feature inventory）
 
@@ -59,6 +61,7 @@
 | 工具（gated）：shell / browse | ⚠️ | 需 `ALLOW_SHELL` / `ALLOW_BROWSER`；shell 有沙箱後端，browse 有 SSRF guard。 |
 | **委派寫程式 `dispatch_coding_task` → 外部 coding harness** | ✅ | 派給 **Claude Code / opencode**（不是派給角色）。harness 可抽換（registry/factories）。 |
 | **角色間委派 `delegate_to_role`（role → role）** | ✅ | 一個角色把子任務交給另一個成員跑一個完整 turn（delegate 用自己的 persona/model/工具/權限/動作模式），結果回傳給呼叫者的 loop。深度上限 2、禁自我委派、跑在子 session `<caller>::<role>`、花費記在 delegate 角色名下。**roster 注入 system prompt**，角色才知道有哪些同事/role id 可委派（2026-07-08 修）。`src/tools/delegateRole.ts` + `runTurn`（`agent.ts`）。 |
+| **多角色會議室（Room channels）** | ✅ | 拖角色進 channel，丟主題 → moderator 挑相關成員（1–3 位、點名生效）→ 逐位以完整 runTurn 發言（可用工具查證）。transcript files-as-truth（`.rooms/`）。v1 固定一間 `main`；無自動多輪辯論。`src/rooms/`。 |
 | 動作模式 act / advise（per-role 預設 + 每回合覆寫） | ✅ | advise 時工具過濾成唯讀 `READONLY_TOOLS`。 |
 | L2 知識庫（INDEX 常駐 + search_knowledge / read_doc 隨選） | ✅ | files-as-truth，無向量庫；角色可綁 `knowledge[]`。 |
 | Skills（SKILL.md，`load_skill` 隨選，可 role-scoped） | ✅ | |
@@ -80,7 +83,8 @@
 
 ## 5. 現在狀態 / 下一步
 
-- **下一步**：Task 1–5 皆完成並驗證（Task 5 角色間委派在 **feature/delegate** 分支，尚未併回 main / web master，也未跟進 mobile）。剩餘 deferred：workflow node-graph designer（sidebar 已留 `soon` 佔位）、projects、mobile 跟進 agent-os 新事件/端點（含 `delegate:*`）。
+- **下一步**：Task 1–6 皆完成並驗證（Task 6 Room channels 在 **feature/room-channels** 分支＝目前最新；分支鏈 main → flow-bot → yale-agent → room-channels，皆未併回 main / 未 push）。剩餘 deferred：workflow node-graph designer（sidebar 已留 `soon` 佔位）、projects、mobile 跟進 agent-os 新事件/端點（含 `delegate:*`/`room:*`）。
+- **Task 6 產物**：後端 `src/rooms/`（types/store/orchestrator）+ `room:*` 事件 + `/api/rooms*` + `index.ts` 依 `room:` 前綴路由；前端 `RoomChannelsView.tsx`（拖拉/點擊加退成員、發言 bubbles、round 指示）+ sidebar Room channels 區 + **sidebar 預設全收合只留 Virtual company**。協定有變（room 事件/REST），mobile 未跟進。
 - **billing**：`billing.json` 已補 `minimax/minimax-m2.5` 價格（input $0.3 / output $1.2 每 M，**估值待校**），所以新對話的花費數字才會動；舊 ledger 紀錄的 `costUSD` 不回算。
 - **🚀 Production 已上線（Zeabur，2026-06-29）**：web https://yagent1.zeabur.app、backend https://api-yagent.zeabur.app，皆實機 200 驗證過。部署拓樸 / Zeabur API token（`./kk`）/ 重部署指令 / 地雷（web 靜態站 `zbpack.json`、main vs feature/memory branch）全在 **`HANDOFF.md` §2.5**。
 - **Task 4 產物**：`web/components/Sidebar.tsx`（殼+四區）、`BudgetPanel.tsx`（精簡花費，從 Dashboard 搬出）；移除 `Dashboard.tsx`；`store.ts` 的 `view` 去 `dashboard`、加 `welcome`，`showDashboard`→`showHome`；`page.tsx` 改成常駐 sidebar + 依 view 切主區。純前端、未動後端/協定，故 `mobile/` 無需跟進此項。

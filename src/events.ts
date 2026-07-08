@@ -45,6 +45,14 @@ export type AgentEvent =
   | (BaseEvent & { type: 'delegate:start'; taskId: string; toRoleId: string; toRoleName: string; task: string })
   | (BaseEvent & { type: 'delegate:event'; taskId: string; kind: string; text: string })
   | (BaseEvent & { type: 'delegate:end'; taskId: string; toRoleId: string; result: string; isError: boolean })
+  // Room channels — a shared meeting room where several roles discuss a topic.
+  // Every utterance (user or role) is fanned out as room:message; a "round"
+  // (moderator picks speakers → each speaks once) is bracketed by round events.
+  // sessionKey is `room:<roomId>`; per-speaker turns run on `room:<id>::<roleId>`
+  // sub-sessions and emit the usual turn:*/tool:* events there.
+  | (BaseEvent & { type: 'room:message'; roomId: string; speaker: string; speakerName?: string; text: string })
+  | (BaseEvent & { type: 'room:round:start'; roomId: string; speakers: string[] })
+  | (BaseEvent & { type: 'room:round:end'; roomId: string; speakers: string[] })
   // Cost/budget metering — so the dashboard updates spend live and warns on caps.
   | (BaseEvent & { type: 'cost:update'; entry: UsageEntry })
   | (BaseEvent & {
