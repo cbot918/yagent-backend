@@ -13,6 +13,8 @@ export interface NormalizedPost {
   replies: number;
   /** Permalink to the post (https://www.threads.com/@user/post/<code>), when derivable. */
   url?: string;
+  /** Unix seconds when the post was created (Threads `taken_at`), when present. */
+  takenAt?: number;
 }
 
 export interface SearchResult {

@@ -34,12 +34,23 @@ export function extractPosts(json: unknown, seen = new Set<string>()): Normalize
         // browser hydration JSON and the EnsembleData envelope; skip the link if absent.
         const code: string | undefined = obj.code;
         const url = code && username !== '?' ? `https://www.threads.com/@${username}/post/${code}` : undefined;
+        // Post creation time: `taken_at` is unix seconds on both sources; some shapes
+        // carry ms-precision `device_timestamp` instead. Absent → undefined (recency
+        // scoring degrades gracefully).
+        const rawTakenAt = obj.taken_at ?? obj.device_timestamp;
+        const takenAt =
+          typeof rawTakenAt === 'number' && rawTakenAt > 1e9
+            ? rawTakenAt > 1e12
+              ? Math.floor(rawTakenAt / 1000)
+              : Math.floor(rawTakenAt)
+            : undefined;
         out.push({
           username,
           text: trimmed,
           likes: Number(obj.like_count ?? 0),
           replies: Number(obj.text_post_app_info?.direct_reply_count ?? obj.reply_count ?? 0),
           url,
+          takenAt,
         });
       }
     }
