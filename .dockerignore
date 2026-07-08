@@ -1,0 +1,10 @@
+.git
+node_modules
+dist
+workspace
+web
+mobile
+.env
+kk
+run.sh
+*.log

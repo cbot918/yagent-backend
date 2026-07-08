@@ -177,6 +177,8 @@ npm --prefix web run build # Next 型別檢查 + static export
 
 **已上線 commit**：backend `b2b22ac`（main）、web `596820c`（master）。兩邊 build-from-source（backend tsc、web `next build`）。
 
+> backend 現在有 root `Dockerfile`（Zeabur 偵測到就取代 zbpack）：base `node:22-bookworm-slim` + `playwright install --with-deps chromium`，讓 browse 工具／Threads browser source 在 prod 可用（還需 env `ALLOW_BROWSER=true`）。代價：image ~1.2GB、build 變慢；Chromium 跑起來吃 RAM，方案太小就把 `threadsHot.ts` 的 `CONCURRENCY` 調低。
+
 **Zeabur 操作路徑（給 agent 用）**：token 放在 repo 根 `./kk`（gitignored），格式是 `zeabur: sk-xxx`（**冒號後那段**才是 token）。GraphQL endpoint `https://api.zeabur.com/graphql`，header `Authorization: Bearer <token>`。introspection 被關，常用查詢：
 - 列服務：`query { projects { edges { node { _id name services { _id name } } } } }`
 - 環境：`query { environments(projectID:"<proj>") { _id name } }`
