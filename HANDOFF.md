@@ -175,7 +175,7 @@ npm --prefix web run build # Next 型別檢查 + static export
 > ⚠️ 後端在 `feature/memory` 開發，但 **production 從 `main` 部署** → 要上線得 `git checkout main && git merge --ff-only feature/memory && git push origin main`。web 直接在 `master`。
 > ⚠️ web 是 **embedded git repo（gitlink）**，`web/node_modules`、`web/dist` 已 `git rm --cached` 不再追蹤（`.gitignore` 本來就忽略；部署是 build-from-source）。改完 web 要在 `web/` 內 commit + `git push origin master`，再回根 `git add web` 更新 gitlink。
 
-**已上線 commit**：backend `b2b22ac`（main）、web `596820c`（master）。兩邊 build-from-source（backend tsc、web `next build`）。
+**已上線 commit**：backend `b6a9a20`（main，2026-07-08）、web `484f23f`（master）。兩邊 build-from-source（backend Dockerfile→tsc、web `next build`）。
 
 > backend 現在有 root `Dockerfile`（Zeabur 偵測到就取代 zbpack）：base `node:22-bookworm-slim` + `playwright install --with-deps chromium`，讓 browse 工具／Threads browser source 在 prod 可用（還需 env `ALLOW_BROWSER=true`）。代價：image ~1.2GB、build 變慢；Chromium 跑起來吃 RAM，方案太小就把 `threadsHot.ts` 的 `CONCURRENCY` 調低。
 
