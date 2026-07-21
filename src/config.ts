@@ -60,4 +60,9 @@ export const config = {
   voiceApiUrl: process.env.VOICE_API_URL ?? 'https://api.openai.com/v1',
   voiceApiKey: process.env.VOICE_API_KEY ?? '',
   voiceModel: process.env.VOICE_MODEL ?? 'whisper-1',
+
+  // eai-erp backend (報價/專案 ERP). Quote tools self-disable when EAIERP_BASE_URL is unset.
+  // Machine auth uses a shared secret sent as the X-Service-Token header (SERVICE_TOKEN on the backend).
+  eaiErpBaseUrl: process.env.EAIERP_BASE_URL ?? '',
+  eaiErpServiceToken: process.env.EAIERP_SERVICE_TOKEN ?? '',
 };

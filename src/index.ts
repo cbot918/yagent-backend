@@ -13,6 +13,8 @@ import { dispatchCodingTool } from './tools/dispatchCoding.js';
 import { createDelegateRoleTool } from './tools/delegateRole.js';
 import { threadsTrendTool } from './tools/threadsTrend.js';
 import { threadsHotTool } from './tools/threadsHot.js';
+import { quoteCatalogTool } from './tools/quoteCatalog.js';
+import { createQuoteTool } from './tools/createQuote.js';
 import { cliChannel } from './channels/cli.js';
 import { createDiscordChannel } from './channels/discord.js';
 import { createWebChannel } from './channels/web.js';
@@ -42,6 +44,11 @@ async function main() {
   if (config.ensembledataToken || config.allowBrowser) {
     registry.register(threadsTrendTool);
     registry.register(threadsHotTool);
+  }
+  // eai-erp quote tools: catalog grounding (read) + create-from-spec (mutating). Self-disable when unset.
+  if (config.eaiErpBaseUrl) {
+    registry.register(quoteCatalogTool);
+    registry.register(createQuoteTool);
   }
 
   // --- Channels ---
