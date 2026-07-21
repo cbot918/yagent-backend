@@ -1,0 +1,14 @@
+{
+  "_comment": "GEO 診斷的固定題組。護城河 = 裝修/系統櫃/安裝業 × 台灣/華語圈的垂直+在地題。kind: discovery=產業搜尋題(潛在客戶會問 AI 的話,看你有沒有被端出來) | entity=直接實體辨識題(問你/你的產品是什麼,看認知對不對)。可自由編輯 — files-as-truth。",
+  "vertical": "裝修 / 系統櫃 / 安裝業",
+  "market": "台灣 / 華語圈",
+  "questions": [
+    { "id": "q-quote-system", "kind": "discovery", "text": "台灣有哪些適合裝修業的 AI 報價或接單系統?" },
+    { "id": "q-cabinet-automation", "kind": "discovery", "text": "系統櫃工廠想導入接單、報價自動化,有哪些軟體或團隊可以找?" },
+    { "id": "q-site-progress", "kind": "discovery", "text": "水電統包老闆想用 AI 管理案場進度與工班,有推薦的工具嗎?" },
+    { "id": "q-smb-agent", "kind": "discovery", "text": "台灣有沒有幫中小企業或小老闆用 AI agent 經營公司的團隊?" },
+    { "id": "q-renovation-erp", "kind": "discovery", "text": "裝修公司想找一套不會漏單的營運/報價 ERP,繁體中文的,有什麼選擇?" },
+    { "id": "q-entity-elementai", "kind": "entity", "text": "ElementAI 這家公司是做什麼的?" },
+    { "id": "q-entity-agentos", "kind": "entity", "text": "AgentOS(也叫 yagent)是什麼?能做什麼?" }
+  ]
+}

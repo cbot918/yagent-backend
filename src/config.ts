@@ -60,4 +60,13 @@ export const config = {
   voiceApiUrl: process.env.VOICE_API_URL ?? 'https://api.openai.com/v1',
   voiceApiKey: process.env.VOICE_API_KEY ?? '',
   voiceModel: process.env.VOICE_MODEL ?? 'whisper-1',
+
+  // GEO diagnosis (Generative Engine Optimization). A deliverable job: probes AI
+  // engines with a fixed vertical question set and reports how they portray a
+  // company. Data files are files-as-truth under knowledge/geo/ (cwd-relative).
+  geoEnginesFile: process.env.GEO_ENGINES_FILE ?? './knowledge/geo/engines.json',
+  geoQuestionsFile: process.env.GEO_QUESTIONS_FILE ?? './knowledge/geo/questions.zh-tw.json',
+  geoProfileFile: process.env.GEO_PROFILE_FILE ?? './knowledge/geo/eai-profile.md',
+  // Judge/synthesis model (cheap, JSON output). '' = fall back to OPENAI_MODEL.
+  geoJudgeModel: process.env.GEO_JUDGE_MODEL ?? '',
 };

@@ -1,0 +1,8 @@
+{
+  "_comment": "GEO 探測用的模型 roster。id=內部識別；label=報告顯示名；mode=closed(訓練記憶,問模型本身認不認得你) | open(即時檢索,經 OpenRouter 會真的上網搜)；model=OpenRouter model id(會變,過時就改這裡)。這些全部經現有 OpenAI-compatible client 打(OPENAI_BASE_URL 指向 OpenRouter)。",
+  "engines": [
+    { "id": "gpt", "label": "ChatGPT (GPT-4o)", "mode": "closed", "model": "openai/gpt-4o" },
+    { "id": "claude", "label": "Claude (Sonnet 4.5)", "mode": "closed", "model": "anthropic/claude-sonnet-4.5" },
+    { "id": "perplexity", "label": "Perplexity (Sonar)", "mode": "open", "model": "perplexity/sonar" }
+  ]
+}
