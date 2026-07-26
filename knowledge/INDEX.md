@@ -13,6 +13,7 @@
 
 ## engineering/ — 工程
 - `engineering/architecture.md` — yagent 架構摘要與規約（權威為根目錄 `CLAUDE.md`）。
+- `engineering/project-workspaces.md` — ERP 專案 ↔ 本機絕對路徑對照。**派工給 coding agent 前必查**：`dispatch_coding_task` 不給 `cwd` 會落在 yagent 自己的 workspace，改到錯的 repo。
 
 ## finance/ — 財務
 - `finance/unit-economics.md` — 單位經濟與定價基準、接案報價檢查清單。

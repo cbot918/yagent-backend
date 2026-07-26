@@ -13,6 +13,12 @@ export interface CodingTask {
   cwd: string;
   /** Optional extra context (project facts/memory) prepended to the prompt. */
   context?: string;
+  /**
+   * The session this dispatch belongs to. Used to kill the harness process if that session
+   * is cancelled — without it, aborting a turn stops the loop but leaves the (expensive)
+   * child running. See `runtime.killSession`.
+   */
+  sessionKey?: string;
 }
 
 export type NormalizedEventKind = 'text' | 'tool' | 'status' | 'error';

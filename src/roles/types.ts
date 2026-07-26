@@ -21,7 +21,13 @@ export interface Role {
   /** Orchestrator model override (OpenAI/OpenRouter id). undefined = default. */
   model?: string;
   /** Coding harness this role dispatches to by default. undefined = default. */
-  codingAgent?: 'claude' | 'opencode';
+  codingAgent?: 'claude' | 'opencode' | 'codex';
+  /**
+   * This member's account in eai-erp (`app_user.email`), so software-project tasks can be
+   * assigned to it. The two systems have separate identity models — swpm tasks point at a
+   * real account row, not at a yagent role id — and this is the only bridge between them.
+   */
+  erpEmail?: string;
   /** Threads data backend for threads_trend: 'ensembledata' (metered API) | 'browser' (free scrape). undefined = default. */
   threadsSource?: 'ensembledata' | 'browser';
   /** Optional tool allowlist (names). undefined/empty = all tools. */

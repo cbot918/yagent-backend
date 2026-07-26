@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import { config } from '../config.js';
 import { bus } from '../events.js';
 import { getCodingAgent } from '../coding-agent/index.js';
-import { budgetGate, recordUsage } from '../usage/index.js';
+import { budgetGate, recordUsage, describeBudget } from '../usage/index.js';
+import { isAborting } from '../abort.js';
 import type { Tool } from './types.js';
 
 /**
@@ -27,12 +28,15 @@ export const dispatchCodingTool: Tool = {
       context: { type: 'string', description: 'Optional extra context (project facts, constraints) to prepend.' },
       cwd: {
         type: 'string',
-        description: 'Optional working directory (absolute, or relative to the workspace). Defaults to the workspace.',
+        description:
+          'Working directory (absolute, or relative to the workspace). Defaults to the workspace — which is NOT the target repo. ' +
+          'When the task is about a specific project, you MUST pass that project\'s absolute path, or the harness will edit the wrong tree.',
       },
       agent: {
         type: 'string',
-        enum: ['claude', 'opencode'],
-        description: 'Which coding agent to use. Defaults to the configured CODING_AGENT.',
+        enum: ['claude', 'opencode', 'codex'],
+        description:
+          'Which coding agent to use. IGNORED when your role is bound to a harness — that binding is what keeps each role\'s spend on its own account. If your harness fails, report the failure; do not re-dispatch to a different one.',
       },
     },
     required: ['task'],
@@ -51,15 +55,27 @@ export const dispatchCodingTool: Tool = {
         : path.resolve(ctx.workspaceDir, cwd)
       : ctx.workspaceDir;
 
-    const codingAgent = getCodingAgent(agent || ctx.codingAgent || config.codingAgent);
-    // Attribute harness spend: Claude rides the subscription; opencode rides OpenRouter.
-    const provider = codingAgent.name === 'claude' ? 'claude-subscription' : 'openrouter';
-    const keyId = codingAgent.name === 'claude' ? 'claude' : 'openrouter';
+    // The role's harness wins over the model's `agent` argument. Roles are bound to a harness
+    // precisely so their spend lands on separate accounts (engineer → Claude subscription,
+    // qa → Codex); letting the loop pick would make that separation advisory — and it does try,
+    // e.g. by retrying on Claude after its own harness errors.
+    const requested = ctx.codingAgent || agent || config.codingAgent;
+    const overridden = agent && ctx.codingAgent && agent !== ctx.codingAgent;
+    const codingAgent = getCodingAgent(requested);
+    // Attribute harness spend to its own account, so a key-scoped budget can govern it.
+    // Codex used to fall into the opencode/OpenRouter bucket, which silently pooled two
+    // different subscriptions under one key.
+    const ATTRIBUTION: Record<string, { provider: string; keyId: string }> = {
+      claude: { provider: 'claude-subscription', keyId: 'claude' },
+      codex: { provider: 'codex-subscription', keyId: 'codex' },
+      opencode: { provider: 'openrouter', keyId: 'openrouter' },
+    };
+    const { provider, keyId } = ATTRIBUTION[codingAgent.name] ?? ATTRIBUTION.opencode;
 
     const blocked = await budgetGate({ provider, keyId, roleId: ctx.roleId });
     if (blocked.length > 0) {
       const b = blocked[0];
-      return `[budget] Coding-agent dispatch blocked: over the ${b.budget.scope}${b.budget.match ? ` "${b.budget.match}"` : ''} limit ($${b.usedUSD.toFixed(2)} / $${b.limitUSD.toFixed(2)}). Raise it in billing.json.`;
+      return `[budget] Coding-agent dispatch blocked: over the ${describeBudget(b)}. Raise it in billing.json.`;
     }
 
     const taskId = randomUUID();
@@ -75,7 +91,7 @@ export const dispatchCodingTool: Tool = {
       ...base,
     });
 
-    const result = await codingAgent.run({ prompt: task, context, cwd: resolvedCwd }, (e) =>
+    const result = await codingAgent.run({ prompt: task, context, cwd: resolvedCwd, sessionKey: ctx.sessionKey }, (e) =>
       bus.emitEvent({ type: 'dispatch:event', taskId, kind: e.kind, text: e.text, ts: Date.now(), ...base }),
     );
 
@@ -107,8 +123,17 @@ export const dispatchCodingTool: Tool = {
       { channel: ctx.channel },
     );
 
+    // A killed harness looks like a crash from here; say what actually happened so the loop
+    // doesn't read it as a code failure and try again.
+    if (isAborting(ctx.sessionKey)) {
+      return '[dispatch cancelled] The user stopped this session, so the coding agent was killed mid-run. Nothing further should be attempted.';
+    }
+
     const costLine = result.costUSD != null ? `\n\n[cost: $${result.costUSD.toFixed(4)}]` : '';
     const status = result.isError ? '[coding agent reported an error]\n\n' : '';
-    return `${status}${result.summary}${costLine}`;
+    const note = overridden
+      ? `\n\n[note: agent="${agent}" was ignored — your role is bound to "${ctx.codingAgent}". Report a harness failure rather than switching harnesses.]`
+      : '';
+    return `${status}${result.summary}${costLine}${note}`;
   },
 };

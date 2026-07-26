@@ -2,17 +2,22 @@ import OpenAI from 'openai';
 import { complete } from './llm.js';
 import { loadSession, saveSession, withSessionLock } from './session.js';
 import { getMemoryContext } from './memory/memory.js';
-import { loadSkillSummaries } from './skills/loader.js';
+import { loadSkillSummaries, loadSkillBody } from './skills/loader.js';
 import { readIndex } from './knowledge/loader.js';
 import { getRole, loadRoles, resolvePersona } from './roles/loader.js';
 import type { Role } from './roles/types.js';
-import { budgetGate, recordUsage, loadBilling, computeLlmCost } from './usage/index.js';
+import { budgetGate, recordUsage, loadBilling, computeLlmCost, describeBudget } from './usage/index.js';
 import { config } from './config.js';
+import { isAborting, clearAbort } from './abort.js';
 import { bus } from './events.js';
 import type { ToolRegistry, ToolContext } from './tools/types.js';
 import type { Channel } from './channels/types.js';
 
 const MAX_ITERATIONS = 20;
+
+// Ceiling on how much bound-skill text gets inlined into the system prompt verbatim.
+// Past this, fall back to summaries + `load_skill` rather than crowding out history.
+const MAX_INLINE_SKILL_CHARS = 24_000;
 
 // In 'advise' (advisory-only) mode a role may use only these non-mutating tools.
 // Everything else (write_file/shell/browse/dispatch_coding_task/save_memory/…)
@@ -27,6 +32,20 @@ const READONLY_TOOLS = new Set([
   'load_skill',
   'threads_trend',
   'threads_hot',
+  // swpm: inspecting projects/tasks/comments is advisory; the writers live in swpmWrite.ts.
+  'list_sw_projects',
+  'get_sw_project',
+  'query_sw_tasks',
+  'list_sw_comments',
+  // todo: reading the list / one item's three layers / past outcomes is advisory.
+  // The writers (refine_todo, create_todo, set_todo_status, create_outcome) are not here —
+  // in advise mode you can inspect and recommend, but not move a task forward.
+  'list_todos',
+  'get_todo',
+  'list_outcomes',
+  // Other repos are readable but never writable through a tool — safe in advise mode.
+  'list_project_files',
+  'read_project_file',
 ]);
 
 type Message = OpenAI.Chat.ChatCompletionMessageParam;
@@ -34,14 +53,40 @@ type Message = OpenAI.Chat.ChatCompletionMessageParam;
 async function buildSystemPrompt(sessionKey: string, role: Role, mode: 'act' | 'advise'): Promise<string> {
   const memory = await getMemoryContext(sessionKey);
 
+  // The model has no clock. Without this it dates things from its training data — which for a
+  // role that writes due dates into an ERP means every date it sets is quietly wrong.
+  const now = new Date();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const today = now.toLocaleDateString('en-CA'); // yyyy-MM-dd, the format the tools expect
+  const weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+
   // Skills: scope to the role's own skills if set, else list all installed.
   const allSkills = await loadSkillSummaries();
   const skills =
     role.skills && role.skills.length ? allSkills.filter((s) => role.skills!.includes(s.dir)) : allSkills;
-  const skillList =
-    skills.length > 0
-      ? skills.map((s) => `- **${s.name}** (dir: \`${s.dir}\`): ${s.description}`).join('\n')
-      : 'No skills installed.';
+
+  // A role's *bound* skills are its standing operating procedure, not optional reading — so
+  // inline them in full rather than trusting the model to call `load_skill` first. It doesn't:
+  // across every session on disk, `load_skill` was called zero times, so swpm-ops' "沒驗收完不准標
+  // DONE" rule never once reached the model and tasks went straight from engineer to DONE with no
+  // qa/sa. Summaries + `load_skill` remain the fallback for the unbound (list-everything) case and
+  // for role skill sets too large to inline.
+  const bodies =
+    role.skills && role.skills.length
+      ? await Promise.all(skills.map(async (s) => ({ ...s, body: await loadSkillBody(s.dir) })))
+      : [];
+  const inlineBudget = bodies.reduce((n, s) => n + s.body.length, 0);
+  const inlineSkills = bodies.length > 0 && inlineBudget <= MAX_INLINE_SKILL_CHARS;
+
+  const skillList = inlineSkills
+    ? bodies
+        .map((s) => `### Skill: ${s.name} (dir: \`${s.dir}\`)\n\n${s.body.trim()}`)
+        .join('\n\n---\n\n') +
+      '\n\nThe above are your standing procedures. Follow them; do not wait to be reminded.'
+    : (skills.length > 0
+        ? skills.map((s) => `- **${s.name}** (dir: \`${s.dir}\`): ${s.description}`).join('\n')
+        : 'No skills installed.') +
+      "\nCall the `load_skill` tool to read a skill's full guidance before using it.";
 
   // Knowledge: always-on INDEX map + this role's bound reference docs.
   const index = await readIndex();
@@ -65,12 +110,17 @@ async function buildSystemPrompt(sessionKey: string, role: Role, mode: 'act' | '
 
 You are "${role.name}"${role.title ? ` — ${role.title}` : ''}, a member of an agent-os virtual company (an OpenClaw-style demo).
 
+## Today
+${today} (${weekday}), timezone ${timeZone}.
+Anything relative — "next week", a due date, "overdue", "how long since" — is measured from
+this date, NOT from what your training data suggests the current date is. When you write a
+date into a system, compute it from here.
+
 ## Your Memory
 ${memory}
 
 ## Available Skills
 ${skillList}
-Call the \`load_skill\` tool to read a skill's full guidance before using it.
 
 ## Knowledge base
 The company knowledge base lives under \`knowledge/\`. Use \`search_knowledge\` to find relevant docs and \`read_doc\` to read one in full. Ground answers in these docs rather than guessing about ElementAI.
@@ -170,7 +220,7 @@ export async function runTurn(registry: ToolRegistry, opts: RunTurnOptions): Pro
       const blocked = await budgetGate({ provider, keyId, roleId: role.id });
       if (blocked.length > 0) {
         const b = blocked[0];
-        finalText = `[budget] Over the ${b.budget.scope}${b.budget.match ? ` "${b.budget.match}"` : ''} limit: $${b.usedUSD.toFixed(2)} / $${b.limitUSD.toFixed(2)} (last ${b.budget.periodDays}d). Pausing — raise the limit in billing.json to continue.`;
+        finalText = `[budget] Over the ${describeBudget(b)}. Pausing — raise the limit in billing.json to continue.`;
         bus.emitEvent({
           type: 'budget:alert',
           budgetId: b.budget.id,
@@ -182,7 +232,15 @@ export async function runTurn(registry: ToolRegistry, opts: RunTurnOptions): Pro
           ...meta,
         });
       } else {
+        let aborted = false;
         while (iteration < MAX_ITERATIONS) {
+          // Check before spending anything on this iteration. A turn that was already
+          // several tool calls deep still has its transcript saved below, so the user can
+          // see how far it got.
+          if (isAborting(sessionKey)) {
+            aborted = true;
+            break;
+          }
           const response = await complete(messages, tools, model);
           const msg = response.choices[0].message;
           messages.push(msg as Message);
@@ -236,13 +294,25 @@ export async function runTurn(registry: ToolRegistry, opts: RunTurnOptions): Pro
             console.log(`[loop:${iteration + 1}] tool: ${tc.function.name} → ${result.slice(0, 100)}`);
             bus.emitEvent({ type: 'tool:result', iteration: iteration + 1, name: tc.function.name, result, ts: Date.now(), ...meta });
             messages.push({ role: 'tool', tool_call_id: tc.id, content: result });
+
+            // Every tool result must be pushed before we can stop — OpenAI rejects a
+            // history where a tool_call has no matching tool message, which would poison
+            // every later turn on this session. So finish the batch, then break.
+            if (isAborting(sessionKey)) aborted = true;
           }
 
+          if (aborted) break;
           iteration++;
         }
 
-        if (!finalText) {
-          finalText = '[agent: reached max iterations without a final response]';
+        if (aborted) {
+          clearAbort(sessionKey);
+          finalText = `[agent: 已於第 ${iteration + 1} 圈由使用者中止。目前為止的過程已保留在對話紀錄裡。]`;
+          console.log(`[loop] session=${sessionKey} aborted by user at iteration ${iteration + 1}`);
+        } else if (!finalText) {
+          finalText =
+            `[agent: 連續 ${MAX_ITERATIONS} 圈都沒有給出結論就停了。` +
+            `通常是工作切太大，或是在用工具反覆摸索。把任務拆小一點再試。]`;
         }
 
         const historyToSave = messages.slice(1); // drop system prompt

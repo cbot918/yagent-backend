@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { createClaudeAdapter } from './claude.js';
 import { createOpencodeAdapter } from './opencode.js';
+import { createCodexAdapter } from './codex.js';
 import { killAll } from './runtime.js';
 import type { CodingAgent } from './types.js';
 
@@ -24,6 +25,7 @@ let cleanupInstalled = false;
 const factories: Record<string, () => CodingAgent> = {
   claude: createClaudeAdapter,
   opencode: createOpencodeAdapter,
+  codex: createCodexAdapter,
 };
 
 /** Names of the available harnesses (for the settings UI / GET /api/agents). */
