@@ -15,6 +15,24 @@ import { threadsTrendTool } from './tools/threadsTrend.js';
 import { threadsHotTool } from './tools/threadsHot.js';
 import { quoteCatalogTool } from './tools/quoteCatalog.js';
 import { createQuoteTool } from './tools/createQuote.js';
+import {
+  listSwProjectsTool,
+  getSwProjectTool,
+  querySwTasksTool,
+  listSwCommentsTool,
+} from './tools/swpmRead.js';
+import { createSwTaskTool, updateSwTaskTool, addSwCommentTool } from './tools/swpmWrite.js';
+import {
+  listTodosTool,
+  getTodoTool,
+  refineTodoTool,
+  createTodoTool,
+  setTodoStatusTool,
+  createOutcomeTool,
+  listOutcomesTool,
+} from './tools/todoErp.js';
+import { smokeCheckTool } from './tools/smokeCheck.js';
+import { listProjectFilesTool, readProjectFileTool } from './tools/projectFiles.js';
 import { cliChannel } from './channels/cli.js';
 import { createDiscordChannel } from './channels/discord.js';
 import { createWebChannel } from './channels/web.js';
@@ -49,6 +67,40 @@ async function main() {
   if (config.eaiErpBaseUrl) {
     registry.register(quoteCatalogTool);
     registry.register(createQuoteTool);
+  }
+  // eai-erp software-project (swpm) tools. Gated on their OWN token, not just the base URL:
+  // the swpm module is a separate machine identity (AGENT_SWPM), so having the quote token
+  // alone must not light these up.
+  if (config.eaiErpBaseUrl && config.eaiErpSwpmToken) {
+    registry.register(listSwProjectsTool);
+    registry.register(getSwProjectTool);
+    registry.register(querySwTasksTool);
+    registry.register(listSwCommentsTool);
+    registry.register(createSwTaskTool);
+    registry.register(updateSwTaskTool);
+    registry.register(addSwCommentTool);
+  }
+  // eai-erp todo + outcome tools. Same gating rule as swpm: their OWN token (AGENT_TODO),
+  // so holding the quote or swpm token alone must not light these up.
+  if (config.eaiErpBaseUrl && config.eaiErpTodoToken) {
+    registry.register(listTodosTool);
+    registry.register(getTodoTool);
+    registry.register(refineTodoTool);
+    registry.register(createTodoTool);
+    registry.register(setTodoStatusTool);
+    registry.register(createOutcomeTool);
+    registry.register(listOutcomesTool);
+  }
+  // E2E acceptance probe. Registered only once some origin is explicitly allowed —
+  // with an empty allowlist every call would be blocked anyway.
+  if (config.e2eAllowedOrigins.length) {
+    registry.register(smokeCheckTool);
+  }
+  // Read-only view of the other repos on this machine. Writing to them stays exclusively
+  // with dispatch_coding_task, so this widens what roles can *see*, never what they can change.
+  if (config.projectsRoot) {
+    registry.register(listProjectFilesTool);
+    registry.register(readProjectFileTool);
   }
 
   // --- Channels ---

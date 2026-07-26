@@ -32,10 +32,27 @@ export async function evaluateBudgets(budgets: Budget[]): Promise<BudgetStatus[]
   for (const b of budgets) {
     const since = now - (b.periodDays || 30) * DAY_MS;
     const entries = await readUsage(since);
-    const usedUSD = entries
-      .filter((e) => appliesTo(b, e))
-      .reduce((a, e) => a + e.costUSD, 0);
-    out.push({ budget: b, usedUSD, limitUSD: b.limitUSD, exceeded: usedUSD >= b.limitUSD });
+    const mine = entries.filter((e) => appliesTo(b, e));
+
+    const usedUSD = mine.reduce((a, e) => a + e.costUSD, 0);
+    const usedTokens = mine.reduce((a, e) => a + (e.inputTokens ?? 0) + (e.outputTokens ?? 0), 0);
+
+    // A cap only counts if it was configured — otherwise a budget with just a token cap
+    // would read as "0 USD used of 0 USD" and be permanently exceeded.
+    const limitUSD = b.limitUSD ?? 0;
+    const limitTokens = b.limitTokens ?? 0;
+    const overUSD = b.limitUSD != null && usedUSD >= b.limitUSD;
+    const overTokens = b.limitTokens != null && usedTokens >= b.limitTokens;
+
+    out.push({
+      budget: b,
+      usedUSD,
+      limitUSD,
+      usedTokens,
+      limitTokens,
+      exceeded: overUSD || overTokens,
+      exceededBy: overUSD ? 'usd' : overTokens ? 'tokens' : undefined,
+    });
   }
   return out;
 }
@@ -80,4 +97,19 @@ export async function recordUsage(entry: UsageEntry, meta: { channel: string }):
       });
     }
   }
+}
+
+/**
+ * Human-readable "how far over" for a tripped budget. A token-capped budget printed as
+ * dollars reads "$0.00 / $0.00", which tells the user nothing about why they were stopped.
+ */
+export function describeBudget(s: BudgetStatus): string {
+  const who = `${s.budget.scope}${s.budget.match ? ` "${s.budget.match}"` : ''}`;
+  // Report in the unit the budget is actually configured in — a token-only budget shown as
+  // "$2.46 / $0.00" looks like a misconfiguration rather than headroom.
+  const useTokens = s.exceededBy === 'tokens' || (s.exceededBy !== 'usd' && s.budget.limitTokens != null);
+  const amount = useTokens
+    ? `${s.usedTokens.toLocaleString()} / ${s.limitTokens.toLocaleString()} tokens`
+    : `$${s.usedUSD.toFixed(2)} / $${s.limitUSD.toFixed(2)}`;
+  return `${who} limit: ${amount} (last ${s.budget.periodDays}d)`;
 }

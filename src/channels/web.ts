@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { config } from '../config.js';
 import { bus } from '../events.js';
 import { loadSession } from '../session.js';
+import { requestAbort, listAborting } from '../abort.js';
 import { readMemory } from '../memory/memory.js';
 import { loadRoles, saveRole } from '../roles/loader.js';
 import type { RolePatch } from '../roles/loader.js';
@@ -109,6 +110,7 @@ async function handleApi(
   res: http.ServerResponse,
   url: URL,
   registry: ToolRegistry,
+  dispatch: MessageHandler | null,
 ): Promise<boolean> {
   const { pathname } = url;
   if (!pathname.startsWith('/api/')) return false;
@@ -134,6 +136,62 @@ async function handleApi(
     } catch (err) {
       sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     }
+    return true;
+  }
+
+  // Stop a running turn. Same cooperative cancellation as the WS `abort` frame — offered
+  // over REST too so it works from curl / a client that isn't holding the socket.
+  const abortMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/);
+  if (abortMatch && req.method === 'POST') {
+    const key = decodeURIComponent(abortMatch[1]);
+    console.log(`[web] abort requested for session=${key}`);
+    const { killedProcesses } = requestAbort(key);
+    sendJson(res, 200, { ok: true, sessionKey: key, killedProcesses, aborting: listAborting() });
+    return true;
+  }
+
+  // Hand a task to a role from outside the browser (the coding session dispatching a
+  // todo to Yale, a cron, a script). Same thing the UI's WebSocket `send` frame does —
+  // exposed over REST so a caller that isn't holding a socket can do it.
+  //
+  // ⚠️ No auth, exactly like the WS path: this endpoint grants nothing the socket didn't
+  //    already grant, so it adds no privilege on a localhost-only server. But it does mean
+  //    "reachable port ⇒ can spend model budget", so if this ever binds a public interface,
+  //    the auth has to go on BOTH /ws and here — locking down only one is theatre.
+  //
+  // Returns 202 immediately and lets the turn run: a real turn takes minutes, and the
+  // caller watches progress on the bus/WS (or re-reads the todo afterwards).
+  if (pathname === '/api/dispatch' && req.method === 'POST') {
+    if (!dispatch) {
+      sendJson(res, 503, { error: 'channel not started yet' });
+      return true;
+    }
+    let body: { roleId?: string; text?: string; sessionKey?: string; actionMode?: 'act' | 'advise' };
+    try {
+      body = JSON.parse((await readBody(req)).toString() || '{}');
+    } catch {
+      sendJson(res, 400, { error: 'invalid JSON body' });
+      return true;
+    }
+    const text = body.text?.trim();
+    if (!body.roleId || !text) {
+      sendJson(res, 400, { error: 'roleId and text are required' });
+      return true;
+    }
+    const roles = await loadRoles();
+    if (!roles.some((r) => r.id === body.roleId)) {
+      sendJson(res, 404, { error: `unknown role "${body.roleId}"` });
+      return true;
+    }
+    // Default key is per-dispatch, not per-role: two different tasks sharing a session key
+    // would make the second one inherit the first one's history. Callers that DO want a
+    // continuing thread (e.g. one session per todo) should pass sessionKey explicitly.
+    const sessionKey = body.sessionKey?.trim() || `dispatch:${body.roleId}:${Date.now()}`;
+    console.log(`[web] dispatch → role=${body.roleId} session=${sessionKey} (${text.length} chars)`);
+    void dispatch({ sessionKey, text, roleId: body.roleId, actionMode: body.actionMode }).catch(
+      (err) => console.error('[web] dispatch handler error:', err),
+    );
+    sendJson(res, 202, { ok: true, sessionKey, roleId: body.roleId });
     return true;
   }
 
@@ -268,7 +326,9 @@ export function createWebChannel(registry: ToolRegistry): Channel {
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
-    handleApi(req, res, url, registry).then((handled) => {
+    // messageHandler is assigned in start(); pass it lazily (null until then) so
+    // /api/dispatch can reach it without hoisting the whole route into this closure.
+    handleApi(req, res, url, registry, messageHandler ?? null).then((handled) => {
       if (!handled) void serveStatic(req, res, url);
     });
   });
@@ -307,6 +367,12 @@ export function createWebChannel(registry: ToolRegistry): Channel {
           void messageHandler({ sessionKey: msg.sessionKey, text: msg.text, roleId: msg.roleId, actionMode: msg.actionMode }).catch((err) => {
             console.error('[web] handler error:', err);
           });
+        } else if (msg.type === 'abort' && msg.sessionKey) {
+          // Cancellation is cooperative — the running loop stops at its next safe point,
+          // so this returns immediately and the turn ends a moment later with an
+          // "aborted" reply. Covers that session's delegates too.
+          requestAbort(msg.sessionKey);
+          console.log(`[web] abort requested for session=${msg.sessionKey}`);
         }
       } catch {
         /* ignore malformed frames */

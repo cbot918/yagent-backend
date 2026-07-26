@@ -25,7 +25,7 @@ export function createClaudeAdapter(): CodingAgent {
 
       return new Promise<CodingResult>((resolve) => {
         const child = spawn(config.claudeBin, args, { cwd: task.cwd, env: process.env });
-        track(child);
+        track(child, task.sessionKey);
         // Prompt is passed as an arg; close stdin so the CLI doesn't wait ~3s
         // for piped input before starting.
         child.stdin?.end();

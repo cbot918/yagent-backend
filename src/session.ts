@@ -17,9 +17,18 @@ export async function withSessionLock<T>(sessionKey: string, fn: () => Promise<T
   }
 }
 
+/**
+ * Filename-safe form of a session key. Note this is lossy: a delegate sub-session
+ * `parent::role` lands on disk as `parent__role`, so anything that reads keys back from the
+ * filesystem (the /api/sessions listing, hence the UI) sees the underscore spelling while the
+ * runtime still uses `::`. Compare keys through here rather than with `===`.
+ */
+export function normalizeSessionKey(sessionKey: string): string {
+  return sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 function sessionPath(sessionKey: string) {
-  const safe = sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(config.workspaceDir, '.sessions', `${safe}.json`);
+  return path.join(config.workspaceDir, '.sessions', `${normalizeSessionKey(sessionKey)}.json`);
 }
 
 export async function loadSession(sessionKey: string): Promise<unknown[]> {

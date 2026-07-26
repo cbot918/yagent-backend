@@ -27,7 +27,7 @@ export function createOpencodeAdapter(): CodingAgent {
 
       return new Promise<CodingResult>((resolve) => {
         const child = spawn(config.opencodeBin, args, { cwd: task.cwd, env });
-        track(child);
+        track(child, task.sessionKey);
         child.stdin?.end();
 
         let out = '';

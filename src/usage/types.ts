@@ -35,7 +35,15 @@ export interface Budget {
   scope: 'global' | 'provider' | 'key' | 'role';
   /** The value to match (provider name / keyId / roleId). Ignored for global. */
   match?: string;
-  limitUSD: number;
+  /** Money cap. Omit when the account isn't billed per token (see `limitTokens`). */
+  limitUSD?: number;
+  /**
+   * Token cap (input + output) for the same window. Use this instead of `limitUSD` for a
+   * flat-rate subscription — Claude/Codex plans bill an allowance, not per token, so their
+   * per-call USD is either 0 or a made-up number and a money cap would never fire.
+   * Both may be set; whichever is hit first trips the budget.
+   */
+  limitTokens?: number;
   /** Rolling window in days. */
   periodDays: number;
 }
@@ -56,7 +64,13 @@ export interface BillingConfig {
 export interface BudgetStatus {
   budget: Budget;
   usedUSD: number;
+  /** 0 when the budget is token-only (no money cap configured). */
   limitUSD: number;
-  /** usedUSD >= limitUSD. */
+  usedTokens: number;
+  /** 0 when the budget has no token cap. */
+  limitTokens: number;
+  /** Either configured cap reached. */
   exceeded: boolean;
+  /** Which cap tripped — for a message that names the real reason. */
+  exceededBy?: 'usd' | 'tokens';
 }
