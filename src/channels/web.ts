@@ -72,6 +72,9 @@ function listenWithRetry(server: http.Server, startPort: number, maxExtra: numbe
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // In prod (dist/channels/web.js) the built frontend lives at <repo>/web/dist.
 const WEB_DIST = path.resolve(__dirname, '../../web/dist');
+// Are we the compiled build (dist/channels/) or tsx running the sources (src/channels/)?
+// Under tsx this port is the API only — see serveStatic.
+const IS_BUILT = path.basename(path.resolve(__dirname, '..')) === 'dist';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -300,7 +303,28 @@ async function handleApi(
   return true;
 }
 
+/**
+ * Under tsx (dev) `web/dist` is a *production* export: stale by however long since the last
+ * `web:build`, and — worse — its NEXT_PUBLIC_API_BASE is baked to the deployed backend. Serving
+ * it here means opening this port gives you an old UI silently wired to prod, where a typed
+ * message runs a real turn on real budget. Send people to the Next dev server instead.
+ */
+function serveDevNotice(res: http.ServerResponse) {
+  res.writeHead(421, { 'content-type': 'text/html; charset=utf-8' });
+  res.end(
+    `<!doctype html><meta charset="utf-8"><title>yagent — wrong port</title>` +
+      `<body style="font:16px/1.6 system-ui;max-width:34rem;margin:12vh auto;padding:0 1.5rem">` +
+      `<h1 style="font-size:1.3rem">This port is the API, not the UI</h1>` +
+      `<p>The backend is running from source, so the built <code>web/dist</code> is not served here — ` +
+      `it is a production bundle pointing at the deployed backend, not this one.</p>` +
+      `<p>Open the Next dev server: <a href="http://localhost:3000">http://localhost:3000</a> ` +
+      `(<code>npm --prefix web run dev</code>, or <code>npm run dev:all</code> to start both).</p></body>`,
+  );
+}
+
 async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, url: URL) {
+  if (!IS_BUILT) return serveDevNotice(res);
+
   const rel = url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
   let filePath = path.resolve(WEB_DIST, rel);
   // Prevent path traversal outside the dist dir.
@@ -388,6 +412,9 @@ export function createWebChannel(registry: ToolRegistry): Channel {
       // On a PaaS (PORT injected) bind exactly; locally scan upward if busy.
       const port = await listenWithRetry(server, config.webPort, config.portFromPaaS ? 0 : 10);
       console.log(`[web] UI server on http://localhost:${port} (ws: /ws)`);
+      if (!IS_BUILT) {
+        console.log(`[web] dev: :${port} serves the API only — open the UI at http://localhost:3000`);
+      }
     },
 
     // No-op: the browser renders replies from the `turn:end` event on the bus,
