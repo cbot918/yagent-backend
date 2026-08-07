@@ -15,6 +15,8 @@ import { listThreadsSources } from '../threads/index.js';
 import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
 import { readThreadsLog, countToday } from '../monitor/threadsLog.js';
 import { listRooms, loadRoom, addParticipant, removeParticipant } from '../rooms/store.js';
+import { listReports, loadReport } from '../geo/store.js';
+import { runGeoDiagnosis, GeoBudgetError } from '../geo/runner.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
 import type { Channel, MessageHandler } from './types.js';
 import type { ToolRegistry } from '../tools/types.js';
@@ -279,6 +281,40 @@ async function handleApi(
   // Monitor: the threads_trend call log (files-as-truth in .monitor/threads.jsonl).
   if (pathname === '/api/monitor/threads') {
     sendJson(res, 200, { entries: await readThreadsLog(200), todayCount: await countToday() });
+    return true;
+  }
+
+  // GEO diagnosis (a deliverable job, not a chat role).
+  //   GET  /api/geo       → list past reports (newest first)
+  //   POST /api/geo       → run a diagnosis { company?, aliases?, vertical?, market? } → the finished report
+  //   GET  /api/geo/:id   → one report
+  if (pathname === '/api/geo' && req.method === 'GET') {
+    sendJson(res, 200, { reports: await listReports() });
+    return true;
+  }
+  if (pathname === '/api/geo' && req.method === 'POST') {
+    try {
+      const body = (await readBody(req)).toString('utf8');
+      const opts = (body ? JSON.parse(body) : {}) as {
+        company?: string;
+        aliases?: string[];
+        vertical?: string;
+        market?: string;
+      };
+      // Blocks until the batch finishes (tens of seconds); v1 accepts a sync POST.
+      const report = await runGeoDiagnosis(opts);
+      sendJson(res, 200, { report });
+    } catch (err) {
+      const status = err instanceof GeoBudgetError ? 402 : 500;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
+    }
+    return true;
+  }
+  const geoMatch = pathname.match(/^\/api\/geo\/([^/]+)$/);
+  if (geoMatch && req.method === 'GET') {
+    const report = await loadReport(decodeURIComponent(geoMatch[1]));
+    if (report) sendJson(res, 200, { report });
+    else sendJson(res, 404, { error: `unknown report "${geoMatch[1]}"` });
     return true;
   }
 
