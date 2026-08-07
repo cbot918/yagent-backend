@@ -8,3 +8,4 @@ web/.next/
 web/out/
 web/next-env.d.ts
 kk
+.DS_Store
