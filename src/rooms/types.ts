@@ -18,4 +18,6 @@ export interface Room {
   /** Role ids currently in the room (join order = fallback speaking order). */
   participants: string[];
   transcript: RoomMsg[];
+  /** Absent on rooms written before multi-room landed; treated as oldest. */
+  createdAt?: number;
 }

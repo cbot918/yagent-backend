@@ -14,7 +14,7 @@ import { listCodingAgents } from '../coding-agent/index.js';
 import { listThreadsSources } from '../threads/index.js';
 import { loadBilling, readUsage, summarize, evaluateBudgets } from '../usage/index.js';
 import { readThreadsLog, countToday } from '../monitor/threadsLog.js';
-import { listRooms, loadRoom, addParticipant, removeParticipant } from '../rooms/store.js';
+import { listRooms, loadRoom, createRoom, deleteRoom, addParticipant, removeParticipant } from '../rooms/store.js';
 import { listReports, loadReport } from '../geo/store.js';
 import { runGeoDiagnosis, GeoBudgetError } from '../geo/runner.js';
 import { isVoiceConfigured, transcribe } from '../voice.js';
@@ -90,7 +90,7 @@ const CONTENT_TYPES: Record<string, string> = {
 /** Allow the separately-deployed web UI to call the API cross-origin. */
 function setCors(res: http.ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', config.webOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 }
 
@@ -250,9 +250,20 @@ async function handleApi(
     return true;
   }
 
-  // Room channels: list rooms / read one room (with transcript) / edit participants.
+  // Room channels: list/create rooms, read one room (with transcript), delete a
+  // room, edit participants.
   if (pathname === '/api/rooms' && req.method === 'GET') {
     sendJson(res, 200, { rooms: await listRooms() });
+    return true;
+  }
+  if (pathname === '/api/rooms' && req.method === 'POST') {
+    try {
+      const body = (await readBody(req)).toString('utf8');
+      const { name } = (body ? JSON.parse(body) : {}) as { name?: string };
+      sendJson(res, 201, { room: await createRoom(name ?? '') });
+    } catch (err) {
+      sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+    }
     return true;
   }
   const roomMatch = pathname.match(/^\/api\/rooms\/([^/]+)(\/participants)?$/);
@@ -262,9 +273,11 @@ async function handleApi(
       try {
         const body = (await readBody(req)).toString('utf8');
         const { add, remove } = (body ? JSON.parse(body) : {}) as { add?: string; remove?: string };
-        let room = add ? await addParticipant(roomId, add) : null;
+        let room = add ? await addParticipant(roomId, add) : await loadRoom(roomId);
         if (remove) room = await removeParticipant(roomId, remove);
-        sendJson(res, 200, { room: room ?? (await loadRoom(roomId)) });
+        // null here means the room is gone, not that the edit was a no-op.
+        if (room) sendJson(res, 200, { room });
+        else sendJson(res, 404, { error: `unknown room "${roomId}"` });
       } catch (err) {
         sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -273,6 +286,12 @@ async function handleApi(
     if (req.method === 'GET') {
       const room = await loadRoom(roomId);
       if (room) sendJson(res, 200, { room });
+      else sendJson(res, 404, { error: `unknown room "${roomId}"` });
+      return true;
+    }
+    if (req.method === 'DELETE') {
+      const ok = await deleteRoom(roomId);
+      if (ok) sendJson(res, 200, { ok: true, roomId });
       else sendJson(res, 404, { error: `unknown room "${roomId}"` });
       return true;
     }

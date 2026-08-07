@@ -7,7 +7,7 @@ import { recordUsage, loadBilling, computeLlmCost } from '../usage/index.js';
 import { config } from '../config.js';
 import type { ToolRegistry } from '../tools/types.js';
 import type { Role } from '../roles/types.js';
-import { loadRoom, saveRoom, ensureDefaultRoom } from './store.js';
+import { loadRoom, saveRoom } from './store.js';
 import type { Room, RoomMsg } from './types.js';
 
 /** Max roles the moderator may pick per user message (cost ceiling). */
@@ -96,7 +96,14 @@ async function pickSpeakers(room: Room, roles: Role[], userText: string): Promis
  */
 export async function runRoomMessage(registry: ToolRegistry, roomId: string, text: string): Promise<void> {
   await withSessionLock(`room:${roomId}`, async () => {
-    const room = (await loadRoom(roomId)) ?? (await ensureDefaultRoom());
+    // Now that rooms can be created and deleted, an unknown id means the room is
+    // gone (or the client is stale) — routing the message into the default room
+    // instead would drop it somewhere the user isn't looking.
+    const room = await loadRoom(roomId);
+    if (!room) {
+      console.warn(`[room] message for unknown room "${roomId}" — dropped`);
+      return;
+    }
     const roles = await loadRoles();
     const base = { sessionKey: `room:${room.id}`, channel: 'web' };
 

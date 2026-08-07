@@ -45,3 +45,13 @@ export async function saveSession(sessionKey: string, messages: unknown[]) {
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify({ messages }, null, 2));
 }
+
+/**
+ * Drop a session's history file. Used when the thing that owned the session goes
+ * away (deleting a room takes its members' `room:<id>::<roleId>` sub-sessions with
+ * it) — otherwise they linger in the /api/sessions listing as orphans. Missing
+ * file is not an error.
+ */
+export async function deleteSession(sessionKey: string): Promise<void> {
+  await fs.rm(sessionPath(sessionKey), { force: true });
+}
