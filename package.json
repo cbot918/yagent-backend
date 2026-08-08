@@ -1,6 +1,7 @@
 {
   "name": "yagent",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "A mini agentic system — OpenClaw in miniature (COSCUP 2026 demo)",
   "type": "module",
   "engines": {
